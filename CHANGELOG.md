@@ -1,11 +1,9 @@
-## TODO: v0.0.1 - 20??-??-?? - Moving
+## v0.0.1 - 2022-01-12 - Moving
 
 #### Nothworthy Changes
 
 * Initial extraction of HetznerProvider from octoDNS core
 
-TODO: anything else
-
 #### Stuff
 
-TODO: anything else
+Nothing
