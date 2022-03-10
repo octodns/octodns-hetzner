@@ -102,8 +102,8 @@ class TestHetznerProvider(TestCase):
         ]
         plan = provider.plan(self.expected)
 
-        # No root NS, no ignored, no excluded, no unsupported
-        n = len(self.expected.records) - 10
+        # No ignored, no excluded, no unsupported
+        n = len(self.expected.records) - 9
         self.assertEqual(n, len(plan.changes))
         self.assertEqual(n, provider.apply(plan))
         self.assertFalse(plan.exists)
