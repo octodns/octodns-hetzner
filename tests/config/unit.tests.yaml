@@ -27,6 +27,10 @@
     - algorithm: 1
       fingerprint: 7491973e5f8b39d5327cd4e08bc81b05f7710b49
       fingerprint_type: 1
+  - type: 'NS'
+    values:
+    - ns1.unit.tests.
+    - ns2.unit.tests.
   - type: CAA
     values:
     - flags: 0

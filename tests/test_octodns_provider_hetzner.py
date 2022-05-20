@@ -69,14 +69,14 @@ class TestHetznerProvider(TestCase):
 
             zone = Zone('unit.tests.', [])
             provider.populate(zone)
-            self.assertEqual(13, len(zone.records))
+            self.assertEqual(14, len(zone.records))
             changes = self.expected.changes(zone, provider)
             self.assertEqual(0, len(changes))
 
         # 2nd populate makes no network calls/all from cache
         again = Zone('unit.tests.', [])
         provider.populate(again)
-        self.assertEqual(13, len(again.records))
+        self.assertEqual(14, len(again.records))
 
         # bust the cache
         del provider._zone_records[zone.name]
@@ -134,6 +134,20 @@ class TestHetznerProvider(TestCase):
                 'ttl': 3600,
                 'type': 'CAA',
                 'value': '0 issue "ca.unit.tests"',
+                'zone_id': 'unit.tests',
+            }),
+            call('POST', '/records', data={
+                'name': '@',
+                'ttl': 3600,
+                'type': 'NS',
+                'value': 'ns1.unit.tests.',
+                'zone_id': 'unit.tests',
+            }),
+            call('POST', '/records', data={
+                'name': '@',
+                'ttl': 3600,
+                'type': 'NS',
+                'value': 'ns2.unit.tests.',
                 'zone_id': 'unit.tests',
             }),
             call('POST', '/records', data={
@@ -264,7 +278,7 @@ class TestHetznerProvider(TestCase):
                 'zone_id': 'unit.tests',
             }),
         ])
-        self.assertEqual(24, provider._client._do.call_count)
+        self.assertEqual(26, provider._client._do.call_count)
 
         provider._client._do.reset_mock()
 
