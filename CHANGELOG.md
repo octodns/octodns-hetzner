@@ -1,4 +1,4 @@
-## vXXX - XXXX-XX-XX
+## v0.0.2 - 2022-05-20 - Root NS Support
 
 * Enable management of root NS records
 
