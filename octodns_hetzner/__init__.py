@@ -18,13 +18,11 @@ class HetznerClientException(ProviderException):
 
 
 class HetznerClientNotFound(HetznerClientException):
-
     def __init__(self):
         super(HetznerClientNotFound, self).__init__('Not Found')
 
 
 class HetznerClientUnauthorized(HetznerClientException):
-
     def __init__(self):
         super(HetznerClientUnauthorized, self).__init__('Unauthorized')
 
@@ -67,8 +65,13 @@ class HetznerClient(object):
         return records
 
     def zone_record_create(self, zone_id, name, _type, value, ttl=None):
-        data = {'name': name or '@', 'ttl': ttl, 'type': _type, 'value': value,
-                'zone_id': zone_id}
+        data = {
+            'name': name or '@',
+            'ttl': ttl,
+            'type': _type,
+            'value': value,
+            'zone_id': zone_id,
+        }
         self._do('POST', '/records', data=data)
 
     def zone_record_delete(self, zone_id, record_id):
@@ -117,7 +120,7 @@ class HetznerProvider(BaseProvider):
         return {
             'ttl': self._record_ttl(records[0]),
             'type': _type,
-            'values': values
+            'values': values,
         }
 
     _data_for_A = _data_for_multiple
@@ -130,15 +133,11 @@ class HetznerProvider(BaseProvider):
             flags = value_without_spaces[0]
             tag = value_without_spaces[1:].split('"')[0]
             value = record['value'].split('"')[1]
-            values.append({
-                'flags': int(flags),
-                'tag': tag,
-                'value': value,
-            })
+            values.append({'flags': int(flags), 'tag': tag, 'value': value})
         return {
             'ttl': self._record_ttl(records[0]),
             'type': _type,
-            'values': values
+            'values': values,
         }
 
     def _data_for_CNAME(self, _type, records):
@@ -146,7 +145,7 @@ class HetznerProvider(BaseProvider):
         return {
             'ttl': self._record_ttl(record),
             'type': _type,
-            'value': self._append_dot(record['value'])
+            'value': self._append_dot(record['value']),
         }
 
     def _data_for_MX(self, _type, records):
@@ -155,14 +154,16 @@ class HetznerProvider(BaseProvider):
             value_stripped_split = record['value'].strip().split(' ')
             preference = value_stripped_split[0]
             exchange = value_stripped_split[-1]
-            values.append({
-                'preference': int(preference),
-                'exchange': self._append_dot(exchange)
-            })
+            values.append(
+                {
+                    'preference': int(preference),
+                    'exchange': self._append_dot(exchange),
+                }
+            )
         return {
             'ttl': self._record_ttl(records[0]),
             'type': _type,
-            'values': values
+            'values': values,
         }
 
     def _data_for_NS(self, _type, records):
@@ -180,19 +181,21 @@ class HetznerProvider(BaseProvider):
         for record in records:
             value_stripped = record['value'].strip()
             priority = value_stripped.split(' ')[0]
-            weight = value_stripped[len(priority):].strip().split(' ')[0]
+            weight = value_stripped[len(priority) :].strip().split(' ')[0]
             target = value_stripped.split(' ')[-1]
-            port = value_stripped[:-len(target)].strip().split(' ')[-1]
-            values.append({
-                'port': int(port),
-                'priority': int(priority),
-                'target': self._append_dot(target),
-                'weight': int(weight)
-            })
+            port = value_stripped[: -len(target)].strip().split(' ')[-1]
+            values.append(
+                {
+                    'port': int(port),
+                    'priority': int(priority),
+                    'target': self._append_dot(target),
+                    'weight': int(weight),
+                }
+            )
         return {
             'ttl': self._record_ttl(records[0]),
             'type': _type,
-            'values': values
+            'values': values,
         }
 
     _data_for_TXT = _data_for_multiple
@@ -201,23 +204,29 @@ class HetznerProvider(BaseProvider):
         if zone.name not in self._zone_records:
             try:
                 zone_id = self.zone_metadata(zone_name=zone.name)['id']
-                self._zone_records[zone.name] = \
-                    self._client.zone_records_get(zone_id)
+                self._zone_records[zone.name] = self._client.zone_records_get(
+                    zone_id
+                )
             except HetznerClientNotFound:
                 return []
 
         return self._zone_records[zone.name]
 
     def populate(self, zone, target=False, lenient=False):
-        self.log.debug('populate: name=%s, target=%s, lenient=%s', zone.name,
-                       target, lenient)
+        self.log.debug(
+            'populate: name=%s, target=%s, lenient=%s',
+            zone.name,
+            target,
+            lenient,
+        )
 
         values = defaultdict(lambda: defaultdict(list))
         for record in self.zone_records(zone):
             _type = record['type']
             if _type not in self.SUPPORTS:
-                self.log.warning('populate: skipping unsupported %s record',
-                                 _type)
+                self.log.warning(
+                    'populate: skipping unsupported %s record', _type
+                )
                 continue
             values[record['name']][record['type']].append(record)
 
@@ -225,13 +234,21 @@ class HetznerProvider(BaseProvider):
         for name, types in values.items():
             for _type, records in types.items():
                 data_for = getattr(self, f'_data_for_{_type}')
-                record = Record.new(zone, name, data_for(_type, records),
-                                    source=self, lenient=lenient)
+                record = Record.new(
+                    zone,
+                    name,
+                    data_for(_type, records),
+                    source=self,
+                    lenient=lenient,
+                )
                 zone.add_record(record, lenient=lenient)
 
         exists = zone.name in self._zone_records
-        self.log.info('populate:   found %s records, exists=%s',
-                      len(zone.records) - before, exists)
+        self.log.info(
+            'populate:   found %s records, exists=%s',
+            len(zone.records) - before,
+            exists,
+        )
         return exists
 
     def _params_for_multiple(self, record):
@@ -240,7 +257,7 @@ class HetznerProvider(BaseProvider):
                 'value': value.replace('\\;', ';'),
                 'name': record.name,
                 'ttl': record.ttl,
-                'type': record._type
+                'type': record._type,
             }
 
     _params_for_A = _params_for_multiple
@@ -253,7 +270,7 @@ class HetznerProvider(BaseProvider):
                 'value': data,
                 'name': record.name,
                 'ttl': record.ttl,
-                'type': record._type
+                'type': record._type,
             }
 
     def _params_for_single(self, record):
@@ -261,7 +278,7 @@ class HetznerProvider(BaseProvider):
             'value': record.value,
             'name': record.name,
             'ttl': record.ttl,
-            'type': record._type
+            'type': record._type,
         }
 
     _params_for_CNAME = _params_for_single
@@ -273,20 +290,22 @@ class HetznerProvider(BaseProvider):
                 'value': data,
                 'name': record.name,
                 'ttl': record.ttl,
-                'type': record._type
+                'type': record._type,
             }
 
     _params_for_NS = _params_for_multiple
 
     def _params_for_SRV(self, record):
         for value in record.values:
-            data = f'{value.priority} {value.weight} {value.port} ' \
+            data = (
+                f'{value.priority} {value.weight} {value.port} '
                 f'{value.target}'
+            )
             yield {
                 'value': data,
                 'name': record.name,
                 'ttl': record.ttl,
-                'type': record._type
+                'type': record._type,
             }
 
     _params_for_TXT = _params_for_multiple
@@ -295,9 +314,13 @@ class HetznerProvider(BaseProvider):
         new = change.new
         params_for = getattr(self, f'_params_for_{new._type}')
         for params in params_for(new):
-            self._client.zone_record_create(zone_id, params['name'],
-                                            params['type'], params['value'],
-                                            params['ttl'])
+            self._client.zone_record_create(
+                zone_id,
+                params['name'],
+                params['type'],
+                params['value'],
+                params['ttl'],
+            )
 
     def _apply_Update(self, zone_id, change):
         # It's way simpler to delete-then-recreate than to update
@@ -308,15 +331,18 @@ class HetznerProvider(BaseProvider):
         existing = change.existing
         zone = existing.zone
         for record in self.zone_records(zone):
-            if existing.name == record['name'] and \
-               existing._type == record['type']:
+            if (
+                existing.name == record['name']
+                and existing._type == record['type']
+            ):
                 self._client.zone_record_delete(zone_id, record['id'])
 
     def _apply(self, plan):
         desired = plan.desired
         changes = plan.changes
-        self.log.debug('_apply: zone=%s, len(changes)=%d', desired.name,
-                       len(changes))
+        self.log.debug(
+            '_apply: zone=%s, len(changes)=%d', desired.name, len(changes)
+        )
 
         try:
             zone_id = self.zone_metadata(zone_name=desired.name)['id']
