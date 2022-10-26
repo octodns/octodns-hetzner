@@ -19,12 +19,12 @@ class HetznerClientException(ProviderException):
 
 class HetznerClientNotFound(HetznerClientException):
     def __init__(self):
-        super(HetznerClientNotFound, self).__init__('Not Found')
+        super().__init__('Not Found')
 
 
 class HetznerClientUnauthorized(HetznerClientException):
     def __init__(self):
-        super(HetznerClientUnauthorized, self).__init__('Unauthorized')
+        super().__init__('Unauthorized')
 
 
 class HetznerClient(object):
@@ -87,7 +87,7 @@ class HetznerProvider(BaseProvider):
     def __init__(self, id, token, *args, **kwargs):
         self.log = logging.getLogger(f'HetznerProvider[{id}]')
         self.log.debug('__init__: id=%s, token=***', id)
-        super(HetznerProvider, self).__init__(id, *args, **kwargs)
+        super().__init__(id, *args, **kwargs)
         self._client = HetznerClient(token)
 
         self._zone_records = {}
