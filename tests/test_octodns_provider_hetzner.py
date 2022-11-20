@@ -88,7 +88,7 @@ class TestHetznerProvider(TestCase):
         del provider._zone_records[zone.name]
 
     def test_apply(self):
-        provider = HetznerProvider('test', 'token')
+        provider = HetznerProvider('test', 'token', strict_supports=False)
 
         resp = Mock()
         resp.json = Mock()
