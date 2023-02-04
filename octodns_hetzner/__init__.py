@@ -2,13 +2,14 @@
 #
 #
 
-from collections import defaultdict
-from requests import Session
 import logging
+from collections import defaultdict
 
-from octodns.record import Record
+from requests import Session
+
 from octodns.provider import ProviderException
 from octodns.provider.base import BaseProvider
+from octodns.record import Record
 
 __VERSION__ = '0.0.2'
 
