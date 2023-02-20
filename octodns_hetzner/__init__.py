@@ -37,7 +37,7 @@ class HetznerClient(object):
         session.headers.update(
             {
                 'Auth-API-Token': token,
-                'User-Agent': f'octodns/{octodns_version} octodns-gcore/{__VERSION__}',
+                'User-Agent': f'octodns/{octodns_version} octodns-hetzner/{__VERSION__}',
             }
         )
         self._session = session
