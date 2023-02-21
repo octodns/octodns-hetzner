@@ -7,6 +7,7 @@ from collections import defaultdict
 
 from requests import Session
 
+from octodns import __VERSION__ as octodns_version
 from octodns.provider import ProviderException
 from octodns.provider.base import BaseProvider
 from octodns.record import Record
@@ -33,7 +34,12 @@ class HetznerClient(object):
 
     def __init__(self, token):
         session = Session()
-        session.headers.update({'Auth-API-Token': token})
+        session.headers.update(
+            {
+                'Auth-API-Token': token,
+                'User-Agent': f'octodns/{octodns_version} octodns-hetzner/{__VERSION__}',
+            }
+        )
         self._session = session
 
     def _do(self, method, path, params=None, data=None):
