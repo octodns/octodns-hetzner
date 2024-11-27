@@ -109,7 +109,7 @@ class TestHetznerProvider(TestCase):
         plan = provider.plan(self.expected)
 
         # No ignored, no excluded, no unsupported
-        n = len(self.expected.records) - 9
+        n = len(self.expected.records) - 8
         self.assertEqual(n, len(plan.changes))
         self.assertEqual(n, provider.apply(plan))
         self.assertFalse(plan.exists)
