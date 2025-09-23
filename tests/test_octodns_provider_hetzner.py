@@ -454,3 +454,64 @@ class TestHetznerProvider(TestCase):
             ],
             any_order=True,
         )
+
+    def test_list_zones(self):
+        provider = HetznerProvider('test', 'token')
+
+        with requests_mock() as mock:
+            base = provider._client.BASE_URL
+            with open('tests/fixtures/hetzner-zones.json') as fh:
+                mock.get(f'{base}/zones', text=fh.read())
+
+            zones = provider.list_zones()
+            self.assertEqual(['unit.tests.'], zones)
+
+    def test_domains_pagination(self):
+        provider = HetznerProvider('test', 'token')
+
+        with requests_mock() as mock:
+            base = provider._client.BASE_URL
+
+            # First page response
+            page1_response = {
+                "zones": [
+                    {"id": "test1.com", "name": "test1.com", "ttl": 3600},
+                    {"id": "test2.com", "name": "test2.com", "ttl": 3600},
+                ],
+                "meta": {
+                    "pagination": {
+                        "page": 1,
+                        "per_page": 2,
+                        "previous_page": 1,
+                        "next_page": 2,
+                        "last_page": 2,
+                        "total_entries": 3,
+                    }
+                },
+            }
+
+            # Second page response
+            page2_response = {
+                "zones": [
+                    {"id": "test3.com", "name": "test3.com", "ttl": 3600}
+                ],
+                "meta": {
+                    "pagination": {
+                        "page": 2,
+                        "per_page": 2,
+                        "previous_page": 1,
+                        "next_page": 2,
+                        "last_page": 2,
+                        "total_entries": 3,
+                    }
+                },
+            }
+
+            mock.get(f'{base}/zones?page=1', json=page1_response)
+            mock.get(f'{base}/zones?page=2', json=page2_response)
+
+            domains = provider._client.domains()
+            self.assertEqual(3, len(domains))
+            self.assertEqual('test1.com', domains[0]['name'])
+            self.assertEqual('test2.com', domains[1]['name'])
+            self.assertEqual('test3.com', domains[2]['name'])

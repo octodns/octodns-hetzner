@@ -53,6 +53,29 @@ class HetznerClient(object):
         response.raise_for_status()
         return response
 
+    def domains(self):
+        path = '/zones'
+        ret = []
+
+        page = 1
+        while True:
+
+            data = self._do('GET', path, {'page': page}).json()
+
+            ret += data.get('zones', [])
+            pagination = data.get('meta', {}).get('pagination', {})
+
+            next_page = pagination.get('next_page')
+            # Hetzner returns 0/None when there is no next page
+            if not next_page or (
+                isinstance(next_page, int) and next_page <= page
+            ):
+                break
+
+            page = next_page
+
+        return ret
+
     def _do_json(self, method, path, params=None, data=None):
         return self._do(method, path, params, data).json()
 
@@ -207,6 +230,11 @@ class HetznerProvider(BaseProvider):
         }
 
     _data_for_TXT = _data_for_multiple
+
+    def list_zones(self):
+        self.log.debug('list_zones:')
+        domains = [f'{d["name"]}.' for d in self._client.domains()]
+        return sorted(domains)
 
     def zone_records(self, zone):
         if zone.name not in self._zone_records:
