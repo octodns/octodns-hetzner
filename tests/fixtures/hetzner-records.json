@@ -10,6 +10,16 @@
             "modified": "0000-00-00 00:00:00.000 +0000 UTC"
         },
         {
+            "id": "PTR:ptr:0",
+            "type": "PTR",
+            "name": "ptr",
+            "value": "foo.bar.com.",
+            "ttl": 300,
+            "zone_id": "unit.tests",
+            "created": "0000-00-00 00:00:00.000 +0000 UTC",
+            "modified": "0000-00-00 00:00:00.000 +0000 UTC"
+        },
+        {
             "id": "0caa9d45c6db9547fbcc578675023d9a",
             "type": "NS",
             "name": "@",
