@@ -33,7 +33,11 @@ class FakeRRSet:
             'ttl': ttl,
         }
         # also update internal records
-        self.records = [FakeRecord(r['value']) for r in records]
+        # Handle both dict and object formats (for ZoneRecord compatibility)
+        self.records = [
+            FakeRecord(r['value'] if isinstance(r, dict) else r.value)
+            for r in records
+        ]
         self.ttl = ttl
         return self.updated
 
@@ -51,9 +55,11 @@ class FakeZone:
         self.created_rrset = None
 
     def create_rrset(self, zone_id, name, type, records, ttl):
-        rr = FakeRRSet(
-            'new', name or '', type, ttl, [r['value'] for r in records]
-        )
+        # Handle both dict and object formats (for ZoneRecord compatibility)
+        values = [
+            r['value'] if isinstance(r, dict) else r.value for r in records
+        ]
+        rr = FakeRRSet('new', name or '', type, ttl, values)
         self.rrsets.append(rr)
         self.created_rrset = {
             'zone_id': zone_id,
@@ -68,7 +74,11 @@ class FakeZone:
         for r in self.rrsets:
             if r.name == (name or '') and r.type == type:
                 # Update in place without calling r.update to simulate fallback
-                r.records = [FakeRecord(v['value']) for v in records]
+                # Handle both dict and object formats (for ZoneRecord compatibility)
+                r.records = [
+                    FakeRecord(v['value'] if isinstance(v, dict) else v.value)
+                    for v in records
+                ]
                 r.ttl = ttl
                 return {
                     'name': name,
@@ -122,9 +132,11 @@ class FakeZones:
 
     def create_rrset(self, zone, name, type, records, ttl):
         """Create RRSet (mimics hcloud API with zone parameter)."""
-        rr = FakeRRSet(
-            'new2', name or '', type, ttl, [r['value'] for r in records]
-        )
+        # Handle both dict and object formats (for ZoneRecord compatibility)
+        values = [
+            r['value'] if isinstance(r, dict) else r.value for r in records
+        ]
+        rr = FakeRRSet('new2', name or '', type, ttl, values)
         zone.rrsets.append(rr)
         return rr
 
@@ -136,7 +148,11 @@ class FakeZones:
             'records': records,
             'ttl': ttl,
         }
-        rrset.records = [FakeRecord(r['value']) for r in records]
+        # Handle both dict and object formats (for ZoneRecord compatibility)
+        rrset.records = [
+            FakeRecord(r['value'] if isinstance(r, dict) else r.value)
+            for r in records
+        ]
         rrset.ttl = ttl
         return rrset
 
@@ -161,6 +177,14 @@ class FakeHCloudClient:
         self.zones = None
 
 
+class FakeZoneRecord:
+    """Fake ZoneRecord class for testing the real import path."""
+
+    def __init__(self, value, comment=None):
+        self.value = value
+        self.comment = comment
+
+
 class TestHCloudAdapter(TestCase):
     def setUp(self):
         # Install a fake 'hcloud' module
@@ -168,6 +192,14 @@ class TestHCloudAdapter(TestCase):
         fake_mod = ModuleType('hcloud')
         fake_mod.Client = FakeHCloudClient
         sys.modules['hcloud'] = fake_mod
+
+        # Add fake zones.domain module with ZoneRecord for coverage
+        fake_zones_mod = ModuleType('hcloud.zones')
+        fake_zones_domain_mod = ModuleType('hcloud.zones.domain')
+        fake_zones_domain_mod.ZoneRecord = FakeZoneRecord
+        fake_zones_mod.domain = fake_zones_domain_mod
+        sys.modules['hcloud.zones'] = fake_zones_mod
+        sys.modules['hcloud.zones.domain'] = fake_zones_domain_mod
 
         # Build fake world
         z1 = FakeZone(
@@ -190,6 +222,9 @@ class TestHCloudAdapter(TestCase):
             sys.modules.pop('hcloud', None)
         else:
             sys.modules['hcloud'] = self._orig
+        # Clean up fake zones modules
+        sys.modules.pop('hcloud.zones', None)
+        sys.modules.pop('hcloud.zones.domain', None)
 
     def test_domains_and_zone_get(self):
         ds = self.client.domains()
@@ -448,12 +483,13 @@ class TestHCloudAdapter(TestCase):
         def create_with_zone_id(**kwargs):
             if 'zone' in kwargs:
                 raise TypeError('unexpected zone parameter')
+            # Handle both dict and object formats (for ZoneRecord compatibility)
+            values = [
+                r['value'] if isinstance(r, dict) else r.value
+                for r in kwargs['records']
+            ]
             rr = FakeRRSet(
-                'new3',
-                kwargs['name'],
-                kwargs['type'],
-                kwargs['ttl'],
-                [r['value'] for r in kwargs['records']],
+                'new3', kwargs['name'], kwargs['type'], kwargs['ttl'], values
             )
             z.rrsets.append(rr)
             return rr
@@ -476,7 +512,11 @@ class TestHCloudAdapter(TestCase):
             if 'rrset' not in kwargs:
                 raise TypeError('missing rrset parameter')
             rrset = kwargs['rrset']
-            rrset.records = [FakeRecord(r['value']) for r in kwargs['records']]
+            # Handle both dict and object formats (for ZoneRecord compatibility)
+            rrset.records = [
+                FakeRecord(r['value'] if isinstance(r, dict) else r.value)
+                for r in kwargs['records']
+            ]
             return rrset
 
         orig_update_zone = FakeZone.update_rrset
@@ -658,12 +698,13 @@ class TestHCloudAdapter(TestCase):
             if 'zone' in kwargs:
                 raise TypeError('unexpected zone parameter')
             zone = kwargs['zone_id']
+            # Handle both dict and object formats (for ZoneRecord compatibility)
+            values = [
+                r['value'] if isinstance(r, dict) else r.value
+                for r in kwargs['records']
+            ]
             rr = FakeRRSet(
-                'new4',
-                kwargs['name'],
-                kwargs['type'],
-                kwargs['ttl'],
-                [r['value'] for r in kwargs['records']],
+                'new4', kwargs['name'], kwargs['type'], kwargs['ttl'], values
             )
             self._zones[zone].rrsets.append(rr)
             return rr
@@ -677,3 +718,23 @@ class TestHCloudAdapter(TestCase):
             )
         finally:
             FakeZones.create_rrset = orig_create
+
+    def test_zonerecord_fallback(self):
+        """Test fallback ZoneRecord class when hcloud.zones.domain unavailable."""
+        # Remove the zones.domain module to trigger fallback
+        orig_zones = sys.modules.pop('hcloud.zones', None)
+        orig_zones_domain = sys.modules.pop('hcloud.zones.domain', None)
+
+        try:
+            # Create a new client without zones.domain available
+            fallback_client = HCloudZonesClient('token2')
+            # Verify fallback ZoneRecord class is used
+            rec = fallback_client._ZoneRecord(value='test', comment='foo')
+            self.assertEqual('test', rec.value)
+            self.assertEqual('foo', rec.comment)
+        finally:
+            # Restore the modules
+            if orig_zones is not None:
+                sys.modules['hcloud.zones'] = orig_zones
+            if orig_zones_domain is not None:
+                sys.modules['hcloud.zones.domain'] = orig_zones_domain

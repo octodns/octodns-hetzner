@@ -30,11 +30,11 @@ __all__ = [
 ]
 
 # Backwards-compatibility: expose HetznerClient at package level when available
-try:  # pragma: no cover - simple import/alias
+try:
     from .dnsapi_client import HetznerClient  # type: ignore
 
     __all__.append('HetznerClient')
-except Exception:  # pragma: no cover
+except Exception:
     # Keep import-time failures from breaking consumers that don't use it
     HetznerClient = None  # type: ignore
 
@@ -95,14 +95,15 @@ class HetznerProvider(BaseProvider):
             # Lazy import is fine even with mandatory dependency, improves import time
             try:
                 from .hcloud_adapter import HCloudZonesClient
-            except ImportError as e:  # pragma: no cover
+
+                return HCloudZonesClient(token)
+            except ImportError as e:
                 # hcloud is a required dependency; guide towards reinstall/fixing env
                 raise ImportError(
                     "backend='hcloud' requires the 'hcloud' package (required dependency). "
                     "It should be installed automatically. Please reinstall octodns-hetzner "
                     "or ensure your environment can import 'hcloud'."
                 ) from e
-            return HCloudZonesClient(token)
         elif backend == 'dnsapi':
             from .dnsapi_client import HetznerClient
 

@@ -33,6 +33,20 @@ class HCloudZonesClient:
         self._hcloud = HCloudClient(token=token)
         self._zones = self._hcloud.zones
 
+        # Try to import ZoneRecord; fallback to a minimal compatible class for tests
+        try:
+            from hcloud.zones.domain import ZoneRecord
+
+            self._ZoneRecord = ZoneRecord
+        except (ImportError, AttributeError):
+            # Fallback for testing or older hcloud versions
+            class _FallbackZoneRecord:
+                def __init__(self, value, comment=None):
+                    self.value = value
+                    self.comment = comment
+
+            self._ZoneRecord = _FallbackZoneRecord
+
     # --- Read methods -----------------------------------------------------
 
     def domains(self) -> List[Dict]:
@@ -153,8 +167,8 @@ class HCloudZonesClient:
                 target = r
                 break
 
-        # Build records list shape expected by client: [{"value": v}, ...]
-        recs = [{'value': v} for v in values]
+        # Build records list shape expected by client: [ZoneRecord(value=v), ...]
+        recs = [self._ZoneRecord(value=v) for v in values]
 
         if target is None:
             # Create new rrset; try zone-level first, then service-level
@@ -318,7 +332,7 @@ class HCloudZonesClient:
             return upd(
                 name=getattr(target, 'name', '@'),
                 type=getattr(target, 'type', None),
-                records=[{'value': v} for v in new_values],
+                records=[self._ZoneRecord(value=v) for v in new_values],
                 ttl=getattr(target, 'ttl', None)
                 or getattr(zone, 'ttl', None)
                 or DEFAULT_TTL,
@@ -329,7 +343,7 @@ class HCloudZonesClient:
                 return uz(
                     name=getattr(target, 'name', '@'),
                     type=getattr(target, 'type', None),
-                    records=[{'value': v} for v in new_values],
+                    records=[self._ZoneRecord(value=v) for v in new_values],
                     ttl=getattr(target, 'ttl', None)
                     or getattr(zone, 'ttl', None)
                     or DEFAULT_TTL,
@@ -339,7 +353,7 @@ class HCloudZonesClient:
                     rrset=target,
                     name=getattr(target, 'name', '@'),
                     type=getattr(target, 'type', None),
-                    records=[{'value': v} for v in new_values],
+                    records=[self._ZoneRecord(value=v) for v in new_values],
                     ttl=getattr(target, 'ttl', None)
                     or getattr(zone, 'ttl', None)
                     or DEFAULT_TTL,
@@ -350,7 +364,7 @@ class HCloudZonesClient:
                 rrset=target,
                 name=getattr(target, 'name', '@'),
                 type=getattr(target, 'type', None),
-                records=[{'value': v} for v in new_values],
+                records=[self._ZoneRecord(value=v) for v in new_values],
                 ttl=getattr(target, 'ttl', None)
                 or getattr(zone, 'ttl', None)
                 or DEFAULT_TTL,

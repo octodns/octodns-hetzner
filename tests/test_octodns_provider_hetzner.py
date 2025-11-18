@@ -527,3 +527,93 @@ class TestHetznerProvider(TestCase):
             self.assertEqual('test1.com', domains[0]['name'])
             self.assertEqual('test2.com', domains[1]['name'])
             self.assertEqual('test3.com', domains[2]['name'])
+
+    def test_hetzner_client_backward_compat_import(self):
+        """Test backward-compatible HetznerClient import."""
+        # Test successful import (normal case)
+        from octodns_hetzner import HetznerClient as ImportedClient
+
+        # HetznerClient should be available
+        self.assertIsNotNone(ImportedClient)
+        # It should be the same as the direct import
+        from octodns_hetzner.dnsapi_client import HetznerClient as DirectClient
+
+        self.assertIs(ImportedClient, DirectClient)
+
+    def test_hetzner_client_import_failure(self):
+        """Test HetznerClient import failure fallback."""
+        import sys
+
+        # Save original modules
+        orig_init = sys.modules.get('octodns_hetzner')
+        orig_dnsapi = sys.modules.get('octodns_hetzner.dnsapi_client')
+        orig_all_keys = list(sys.modules.keys())
+
+        try:
+            # Make dnsapi_client unavailable
+            sys.modules['octodns_hetzner.dnsapi_client'] = None
+
+            # Remove octodns_hetzner to force reload
+            if 'octodns_hetzner' in sys.modules:
+                del sys.modules['octodns_hetzner']
+
+            # Import octodns_hetzner - dnsapi_client import should fail
+            import octodns_hetzner
+
+            # Verify HetznerClient is None (fallback was triggered)
+            self.assertIsNone(octodns_hetzner.HetznerClient)
+
+        finally:
+            # Restore original modules
+            if orig_init is not None:
+                sys.modules['octodns_hetzner'] = orig_init
+            else:
+                sys.modules.pop('octodns_hetzner', None)
+
+            if orig_dnsapi is not None:
+                sys.modules['octodns_hetzner.dnsapi_client'] = orig_dnsapi
+            else:
+                sys.modules.pop('octodns_hetzner.dnsapi_client', None)
+
+            # Clean up any modules that were imported during the test
+            for key in list(sys.modules.keys()):
+                if key not in orig_all_keys and 'octodns_hetzner' in key:
+                    del sys.modules[key]
+
+    def test_hcloud_backend_import_error(self):
+        """Test ImportError when hcloud backend is requested but unavailable."""
+        import sys
+        from unittest.mock import MagicMock
+
+        # Save original module
+        orig_hcloud_adapter = sys.modules.get('octodns_hetzner.hcloud_adapter')
+
+        try:
+            # Create a mock module that raises ImportError when HCloudZonesClient is accessed
+            mock_module = MagicMock()
+            type(mock_module).HCloudZonesClient = property(
+                lambda self: (_ for _ in ()).throw(
+                    ImportError("No module named 'hcloud'")
+                )
+            )
+
+            # Replace the module in sys.modules to force the import to use our mock
+            sys.modules['octodns_hetzner.hcloud_adapter'] = mock_module
+
+            # Try to create provider with hcloud backend - should fail
+            with self.assertRaises(ImportError) as ctx:
+                HetznerProvider('test', 'token', backend='hcloud')
+
+            # Verify error message mentions hcloud and reinstall
+            self.assertIn('hcloud', str(ctx.exception))
+            self.assertIn('required dependency', str(ctx.exception))
+            self.assertIn('reinstall', str(ctx.exception))
+
+        finally:
+            # Restore original module
+            if orig_hcloud_adapter is not None:
+                sys.modules['octodns_hetzner.hcloud_adapter'] = (
+                    orig_hcloud_adapter
+                )
+            else:
+                sys.modules.pop('octodns_hetzner.hcloud_adapter', None)
