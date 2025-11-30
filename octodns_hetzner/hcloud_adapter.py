@@ -45,6 +45,13 @@ class HCloudZonesClient:
                     self.value = value
                     self.comment = comment
 
+                def to_payload(self):
+                    """Generates the request payload from this domain object."""
+                    payload = {'value': self.value}
+                    if self.comment is not None:
+                        payload['comment'] = self.comment
+                    return payload
+
             self._ZoneRecord = _FallbackZoneRecord
 
     # --- Read methods -----------------------------------------------------
@@ -146,6 +153,21 @@ class HCloudZonesClient:
             'ttl': ttl or 3600,
         }
 
+    # --- Value normalization -----------------------------------------------
+
+    def _quote_txt_value(self, value: str) -> str:
+        """Wrap TXT record value in double quotes for hcloud API.
+
+        The hcloud API requires TXT records to be fully escaped with double
+        quotes. This method ensures values are properly quoted.
+        """
+        if value.startswith('"') and value.endswith('"'):
+            # Already quoted
+            return value
+        # Escape backslashes and double quotes, then wrap in quotes
+        escaped = value.replace('\\', '\\\\').replace('"', '\\"')
+        return f'"{escaped}"'
+
     # --- RRSet operations --------------------------------------------------
 
     def rrset_upsert(
@@ -168,113 +190,34 @@ class HCloudZonesClient:
                 break
 
         # Build records list shape expected by client: [ZoneRecord(value=v), ...]
-        recs = [self._ZoneRecord(value=v) for v in values]
+        # TXT records need to be quoted for the hcloud API
+        if _type == 'TXT':
+            recs = [
+                self._ZoneRecord(value=self._quote_txt_value(v)) for v in values
+            ]
+        else:
+            recs = [self._ZoneRecord(value=v) for v in values]
 
         if target is None:
-            # Create new rrset; try zone-level first, then service-level
-            cz = getattr(zone, 'create_rrset', None)
-            if callable(cz):
-                try:
-                    return cz(
-                        name=name or '@', type=_type, records=recs, ttl=ttl
-                    )
-                except TypeError:
-                    # Some implementations expect zone_id keyword
-                    return cz(
-                        zone_id=getattr(zone, 'id', None),
-                        name=name or '@',
-                        type=_type,
-                        records=recs,
-                        ttl=ttl,
-                    )
-
-            cZ = getattr(self._zones, 'create_rrset', None)
-            if callable(cZ):
-                try:
-                    return cZ(
-                        zone=zone,
-                        name=name or '@',
-                        type=_type,
-                        records=recs,
-                        ttl=ttl,
-                    )
-                except TypeError:
-                    return cZ(
-                        zone_id=getattr(zone, 'id', None),
-                        name=name or '@',
-                        type=_type,
-                        records=recs,
-                        ttl=ttl,
-                    )
-            raise NotImplementedError(
-                'hcloud backend: rrset create not available in client'
+            # Create new rrset using zone.create_rrset
+            return zone.create_rrset(
+                name=name or '@', type=_type, records=recs, ttl=ttl
             )
         else:
-            # Update existing rrset; prefer rrset.update, then zone/service fallbacks
-            upd = getattr(target, 'update', None)
-            if callable(upd):
-                return upd(name=name or '@', type=_type, records=recs, ttl=ttl)
-
-            uz = getattr(zone, 'update_rrset', None)
-            if callable(uz):
-                try:
-                    return uz(
-                        name=name or '@', type=_type, records=recs, ttl=ttl
-                    )
-                except TypeError:
-                    return uz(
-                        rrset=target,
-                        name=name or '@',
-                        type=_type,
-                        records=recs,
-                        ttl=ttl,
-                    )
-
-            uZ = getattr(self._zones, 'update_rrset', None)
-            if callable(uZ):
-                return uZ(
-                    rrset=target,
-                    name=name or '@',
-                    type=_type,
-                    records=recs,
-                    ttl=ttl,
-                )
-            raise NotImplementedError(
-                'hcloud backend: rrset update not available in client'
-            )
+            # Update existing rrset using set_rrset_records (the correct API for
+            # replacing records). update_rrset only handles labels, not records.
+            return zone.set_rrset_records(rrset=target, records=recs, ttl=ttl)
 
     def rrset_delete(self, zone_id: str, name: str, _type: str):
         zone = self._get_zone_by_id_or_name(zone_id)
         rrsets = self._get_rrsets(zone)
-        for idx, r in enumerate(list(rrsets)):
+        for r in rrsets:
             if (
                 getattr(r, 'name', None) == (name or '')
                 and getattr(r, 'type', None) == _type
             ):
-                # Try rrset.delete, then zone.delete_rrset, then service.delete_rrset
-                dr = getattr(r, 'delete', None)
-                if callable(dr):
-                    result = dr(name=name or '@', type=_type)
-                else:
-                    dz = getattr(zone, 'delete_rrset', None)
-                    if callable(dz):
-                        try:
-                            result = dz(name=name or '@', type=_type)
-                        except TypeError:
-                            result = dz(rrset=r)
-                    else:
-                        dZ = getattr(self._zones, 'delete_rrset', None)
-                        if not callable(dZ):
-                            raise NotImplementedError(
-                                'hcloud backend: rrset delete not available in client'
-                            )
-                        result = dZ(rrset=r)
-                # Remove from list if possible
-                try:
-                    rrsets.pop(idx)
-                except Exception:
-                    pass
-                return result
+                # Use zone.delete_rrset with the rrset object
+                return zone.delete_rrset(rrset=r)
         # Nothing to delete
         return None
 
@@ -297,80 +240,17 @@ class HCloudZonesClient:
         ]
         new_values = [v for v in current if v != value]
         if not new_values:
-            # delete entire rrset via rrset/zone/service
-            dr = getattr(target, 'delete', None)
-            if callable(dr):
-                result = dr(
-                    name=getattr(target, 'name', '@'),
-                    type=getattr(target, 'type', None),
-                )
-            else:
-                dz = getattr(zone, 'delete_rrset', None)
-                if callable(dz):
-                    try:
-                        result = dz(
-                            name=getattr(target, 'name', '@'),
-                            type=getattr(target, 'type', None),
-                        )
-                    except TypeError:
-                        result = dz(rrset=target)
-                else:
-                    dZ = getattr(self._zones, 'delete_rrset', None)
-                    if not callable(dZ):
-                        raise NotImplementedError(
-                            'hcloud backend: rrset delete not available in client'
-                        )
-                    result = dZ(rrset=target)
-            try:
-                rrsets.remove(target)
-            except Exception:
-                pass
-            return result
-        # update rrset via rrset/zone/service
-        upd = getattr(target, 'update', None)
-        if callable(upd):
-            return upd(
-                name=getattr(target, 'name', '@'),
-                type=getattr(target, 'type', None),
-                records=[self._ZoneRecord(value=v) for v in new_values],
-                ttl=getattr(target, 'ttl', None)
-                or getattr(zone, 'ttl', None)
-                or DEFAULT_TTL,
-            )
-        uz = getattr(zone, 'update_rrset', None)
-        if callable(uz):
-            try:
-                return uz(
-                    name=getattr(target, 'name', '@'),
-                    type=getattr(target, 'type', None),
-                    records=[self._ZoneRecord(value=v) for v in new_values],
-                    ttl=getattr(target, 'ttl', None)
-                    or getattr(zone, 'ttl', None)
-                    or DEFAULT_TTL,
-                )
-            except TypeError:
-                return uz(
-                    rrset=target,
-                    name=getattr(target, 'name', '@'),
-                    type=getattr(target, 'type', None),
-                    records=[self._ZoneRecord(value=v) for v in new_values],
-                    ttl=getattr(target, 'ttl', None)
-                    or getattr(zone, 'ttl', None)
-                    or DEFAULT_TTL,
-                )
-        uZ = getattr(self._zones, 'update_rrset', None)
-        if callable(uZ):
-            return uZ(
-                rrset=target,
-                name=getattr(target, 'name', '@'),
-                type=getattr(target, 'type', None),
-                records=[self._ZoneRecord(value=v) for v in new_values],
-                ttl=getattr(target, 'ttl', None)
-                or getattr(zone, 'ttl', None)
-                or DEFAULT_TTL,
-            )
-        raise NotImplementedError(
-            'hcloud backend: rrset update not available in client'
+            # Delete entire rrset when no values remain
+            return zone.delete_rrset(rrset=target)
+        # Update rrset with remaining values using set_rrset_records
+        ttl = (
+            getattr(target, 'ttl', None)
+            or getattr(zone, 'ttl', None)
+            or DEFAULT_TTL
+        )
+        new_records = [self._ZoneRecord(value=v) for v in new_values]
+        return zone.set_rrset_records(
+            rrset=target, records=new_records, ttl=ttl
         )
 
     # --- Internal helpers --------------------------------------------------

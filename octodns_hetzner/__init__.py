@@ -180,8 +180,14 @@ class HetznerProvider(BaseProvider):
                 tag = parts[1]
                 value = parts[2]
                 values.append({'flags': flags, 'tag': tag, 'value': value})
-            except Exception:
+            except Exception as e:
                 # Fallback best-effort for unexpected formats
+                self.log.warning(
+                    '_data_for_CAA: failed to parse CAA record %r: %s, '
+                    'using fallback values (flags=0, tag=issue)',
+                    raw,
+                    e,
+                )
                 values.append({'flags': 0, 'tag': 'issue', 'value': raw})
         return {
             'ttl': self._record_ttl(records[0]),
