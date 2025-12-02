@@ -137,15 +137,20 @@ class HCloudZonesClient:
         rrset_id, _, value = record_id.partition(':')
         return self._rrset_remove_value(zone_id, rrset_id, value)
 
-    def zone_create(self, name: str, ttl: int = None) -> Dict:
+    def zone_create(
+        self, name: str, ttl: int = None, mode: str = "primary"
+    ) -> Dict:
         # Best-effort create; fall back to client's create if available
         create = getattr(self._zones, 'create', None)
         if create is None:
             raise NotImplementedError(
                 'hcloud backend: zone creation unsupported by client'
             )
-        # Some clients may expect parameters by name
-        zone = create(name=name)
+        # Pass mode (required) and ttl (optional) to the API
+        kwargs = {'name': name, 'mode': mode}
+        if ttl is not None:
+            kwargs['ttl'] = ttl
+        zone = create(**kwargs)
         # Normalize return shape to dict
         return {
             'id': getattr(zone, 'id', None),
@@ -199,14 +204,14 @@ class HCloudZonesClient:
             recs = [self._ZoneRecord(value=v) for v in values]
 
         if target is None:
-            # Create new rrset using zone.create_rrset
+            # Create new rrset using zone.create_rrset - TTL is accepted here
             return zone.create_rrset(
                 name=name or '@', type=_type, records=recs, ttl=ttl
             )
         else:
-            # Update existing rrset using set_rrset_records (the correct API for
-            # replacing records). update_rrset only handles labels, not records.
-            return zone.set_rrset_records(rrset=target, records=recs, ttl=ttl)
+            # Update records only (TTL preserved from existing RRSet).
+            # set_rrset_records does not accept ttl; use change_rrset_ttl if needed.
+            return zone.set_rrset_records(rrset=target, records=recs)
 
     def rrset_delete(self, zone_id: str, name: str, _type: str):
         zone = self._get_zone_by_id_or_name(zone_id)
@@ -242,16 +247,9 @@ class HCloudZonesClient:
         if not new_values:
             # Delete entire rrset when no values remain
             return zone.delete_rrset(rrset=target)
-        # Update rrset with remaining values using set_rrset_records
-        ttl = (
-            getattr(target, 'ttl', None)
-            or getattr(zone, 'ttl', None)
-            or DEFAULT_TTL
-        )
+        # Update rrset with remaining values (TTL preserved from existing RRSet)
         new_records = [self._ZoneRecord(value=v) for v in new_values]
-        return zone.set_rrset_records(
-            rrset=target, records=new_records, ttl=ttl
-        )
+        return zone.set_rrset_records(rrset=target, records=new_records)
 
     # --- Internal helpers --------------------------------------------------
 

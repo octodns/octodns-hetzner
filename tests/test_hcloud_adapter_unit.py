@@ -69,14 +69,17 @@ class FakeZone:
         }
         return self.created_rrset
 
-    def set_rrset_records(self, rrset, records, ttl):
-        """Update rrset records (the correct API for updating records)."""
+    def set_rrset_records(self, rrset, records):
+        """Update rrset records (the correct API for updating records).
+
+        Note: This method does NOT accept ttl parameter per hcloud API.
+        Use change_rrset_ttl() to update TTL separately.
+        """
         # Handle both dict and object formats (for ZoneRecord compatibility)
         rrset.records = [
             FakeRecord(v['value'] if isinstance(v, dict) else v.value)
             for v in records
         ]
-        rrset.ttl = ttl
         return rrset
 
     def delete_rrset(self, rrset):
@@ -113,8 +116,16 @@ class FakeZones:
         """Get all RRSets for a zone (mimics hcloud API)."""
         return zone.rrsets if zone.rrsets is not None else []
 
-    def create(self, name):
-        z = FakeZone(name, name, 3600)
+    def create(self, *, name, mode, ttl=None):
+        """Create a new zone (mimics hcloud API).
+
+        Args:
+            name: Zone name (required)
+            mode: Zone mode, 'primary' or 'secondary' (required)
+            ttl: Default TTL for the zone (optional)
+        """
+        z = FakeZone(name, name, ttl or 3600)
+        z.mode = mode
         self._zones[name] = z
         self._by_name[name] = z
         return z
@@ -303,8 +314,15 @@ class TestHCloudAdapter(TestCase):
         )
 
     def test_zone_create(self):
+        # Test with explicit ttl
         out = self.client.zone_create('newzone.test', 3600)
         self.assertEqual('newzone.test', out['name'])
+        self.assertEqual(3600, out['ttl'])
+
+        # Test without ttl (covers the ttl=None branch)
+        out2 = self.client.zone_create('newzone2.test')
+        self.assertEqual('newzone2.test', out2['name'])
+        self.assertEqual(3600, out2['ttl'])  # defaults to 3600
 
     def test_zone_records_get_rrsets_none_and_ttl_fallback_3600(self):
         # Create zone with rrsets None and ttl None; set rrsets=None after init
