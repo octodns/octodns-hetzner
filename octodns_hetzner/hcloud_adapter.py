@@ -32,6 +32,9 @@ class HCloudZonesClient:
 
         self._hcloud = HCloudClient(token=token)
         self._zones = self._hcloud.zones
+        self._zone_cache = (
+            {}
+        )  # Cache zone objects to handle eventual consistency
 
         # Try to import ZoneRecord; fallback to a minimal compatible class for tests
         try:
@@ -151,12 +154,14 @@ class HCloudZonesClient:
         if ttl is not None:
             kwargs['ttl'] = ttl
         zone = create(**kwargs)
+
+        # Cache zone object to handle API eventual consistency
+        zone_id = getattr(zone, 'id', None)
+        if zone_id:
+            self._zone_cache[zone_id] = zone
+
         # Normalize return shape to dict
-        return {
-            'id': getattr(zone, 'id', None),
-            'name': name,
-            'ttl': ttl or 3600,
-        }
+        return {'id': zone_id, 'name': name, 'ttl': ttl or 3600}
 
     # --- Value normalization -----------------------------------------------
 
@@ -254,6 +259,10 @@ class HCloudZonesClient:
     # --- Internal helpers --------------------------------------------------
 
     def _get_zone_by_id_or_name(self, zone_id_or_name: str) -> Any:
+        # Check cache first (handles eventual consistency after zone_create)
+        if zone_id_or_name in self._zone_cache:
+            return self._zone_cache[zone_id_or_name]
+
         gb = getattr(self._zones, 'get_by_id', None)
         if callable(gb):
             try:

@@ -151,3 +151,38 @@ class TestHetznerProviderHCloud(TestCase):
         provider.apply(plan)
 
         client.rrset_delete.assert_called_once_with('unit.tests', 'gone', 'TXT')
+
+    def test_apply_new_zone_with_records_succeeds(self):
+        """Verify zone creation + immediate record creation works.
+
+        This tests the fix for the race condition where a newly created zone
+        isn't immediately queryable via the API due to eventual consistency.
+        """
+        provider, client = self._provider_with_mock_client()
+
+        client.zone_get.side_effect = IndexError('zone not found')
+        client.zone_create.return_value = {
+            'id': 'new.zone',
+            'name': 'new.zone',
+            'ttl': 3600,
+        }
+        client.zone_records_get.return_value = []
+        client.rrset_upsert.return_value = None
+
+        zone = Zone('new.zone.', [])
+        zone.add_record(
+            Record.new(
+                zone,
+                '',
+                {'ttl': 300, 'type': 'A', 'values': ['1.2.3.4', '5.6.7.8']},
+            )
+        )
+
+        plan = provider.plan(zone)
+        self.assertEqual(1, len(plan.changes))
+
+        applied = provider.apply(plan)
+        self.assertEqual(1, applied)
+
+        client.zone_create.assert_called_once_with('new.zone')
+        client.rrset_upsert.assert_called_once()

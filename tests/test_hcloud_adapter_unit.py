@@ -476,3 +476,52 @@ class TestHCloudAdapter(TestCase):
                 sys.modules['hcloud.zones'] = orig_zones
             if orig_zones_domain is not None:
                 sys.modules['hcloud.zones.domain'] = orig_zones_domain
+
+    def test_zone_create_caches_zone_for_immediate_lookup(self):
+        """Test that zone_create caches zone to avoid race condition.
+
+        This tests the fix for the eventual consistency issue where a newly
+        created zone isn't immediately queryable via the API.
+        """
+        result = self.client.zone_create('cached.test', 3600)
+        zone_id = result['id']
+
+        # Verify zone is in cache
+        self.assertIn(zone_id, self.client._zone_cache)
+
+        # Verify _get_zone_by_id_or_name returns cached zone even if API fails
+        orig_get_by_id = self.client._zones.get_by_id
+        orig_get = self.client._zones.get
+
+        def fail_lookup(id_or_name):
+            raise KeyError(f'Zone not found: {id_or_name}')
+
+        self.client._zones.get_by_id = fail_lookup
+        self.client._zones.get = fail_lookup
+
+        try:
+            # Should still work because of cache
+            zone = self.client._get_zone_by_id_or_name(zone_id)
+            self.assertEqual('cached.test', zone.name)
+        finally:
+            self.client._zones.get_by_id = orig_get_by_id
+            self.client._zones.get = orig_get
+
+    def test_zone_create_handles_zone_without_id(self):
+        """Test zone_create handles edge case where zone has no ID."""
+
+        # Override create to return zone without id attribute
+        class ZoneWithoutId:
+            name = 'noid.test'
+
+        orig_create = self.client._zones.create
+        self.client._zones.create = lambda **kwargs: ZoneWithoutId()
+
+        try:
+            result = self.client.zone_create('noid.test', 3600)
+            # Should return None for id and not cache
+            self.assertIsNone(result['id'])
+            self.assertEqual('noid.test', result['name'])
+            self.assertNotIn(None, self.client._zone_cache)
+        finally:
+            self.client._zones.create = orig_create
