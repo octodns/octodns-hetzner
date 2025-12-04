@@ -3,6 +3,8 @@
 * Address pending octoDNS 2.x deprecations, require minimum of 1.5.x
 * Add hcloud backend with Strategy Pattern for Cloud Zones API support
 * Fix hcloud zone creation race condition by caching zone objects
+* Fix hcloud apex record name normalization (`@` vs empty string)
+* Fix hcloud zone recreation cache staleness after external deletion
 
 ## v0.0.3 - 2023-02-08 - AKA
 

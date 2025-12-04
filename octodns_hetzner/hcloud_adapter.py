@@ -149,6 +149,19 @@ class HCloudZonesClient:
             raise NotImplementedError(
                 'hcloud backend: zone creation unsupported by client'
             )
+
+        # Clear stale cache entries for zones with the same name.
+        # This handles zone recreation after external deletion, where
+        # the old zone_id may still be in the cache pointing to a
+        # deleted zone object.
+        stale_ids = [
+            zid
+            for zid, zobj in self._zone_cache.items()
+            if getattr(zobj, 'name', None) == name
+        ]
+        for zid in stale_ids:
+            del self._zone_cache[zid]
+
         # Pass mode (required) and ttl (optional) to the API
         kwargs = {'name': name, 'mode': mode}
         if ttl is not None:
@@ -164,6 +177,16 @@ class HCloudZonesClient:
         return {'id': zone_id, 'name': name, 'ttl': ttl or 3600}
 
     # --- Value normalization -----------------------------------------------
+
+    def _normalize_name(self, name: str) -> str:
+        """Normalize record name: '@' and '' both represent apex.
+
+        The hcloud API uses '@' for apex records, but octodns uses ''.
+        This ensures matching works correctly regardless of which form is used.
+        """
+        if name == '@':
+            return ''
+        return name or ''
 
     def _quote_txt_value(self, value: str) -> str:
         """Wrap TXT record value in double quotes for hcloud API.
@@ -191,9 +214,11 @@ class HCloudZonesClient:
         # Try to locate existing rrset
         rrsets = self._get_rrsets(zone)
         target = None
+        normalized_name = self._normalize_name(name)
         for r in rrsets:
             if (
-                getattr(r, 'name', None) == (name or '')
+                self._normalize_name(getattr(r, 'name', None) or '')
+                == normalized_name
                 and getattr(r, 'type', None) == _type
             ):
                 target = r
@@ -221,9 +246,11 @@ class HCloudZonesClient:
     def rrset_delete(self, zone_id: str, name: str, _type: str):
         zone = self._get_zone_by_id_or_name(zone_id)
         rrsets = self._get_rrsets(zone)
+        normalized_name = self._normalize_name(name)
         for r in rrsets:
             if (
-                getattr(r, 'name', None) == (name or '')
+                self._normalize_name(getattr(r, 'name', None) or '')
+                == normalized_name
                 and getattr(r, 'type', None) == _type
             ):
                 # Use zone.delete_rrset with the rrset object

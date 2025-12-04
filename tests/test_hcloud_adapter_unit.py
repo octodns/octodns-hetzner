@@ -92,6 +92,8 @@ class FakeZone:
 
 
 class FakeZones:
+    _id_counter = 0  # Class-level counter for unique zone IDs
+
     def __init__(self, zones):
         self._zones = {z.id: z for z in zones}
         self._by_name = {z.name: z for z in zones}
@@ -124,9 +126,12 @@ class FakeZones:
             mode: Zone mode, 'primary' or 'secondary' (required)
             ttl: Default TTL for the zone (optional)
         """
-        z = FakeZone(name, name, ttl or 3600)
+        # Generate unique zone ID (real API returns unique IDs)
+        FakeZones._id_counter += 1
+        zone_id = f'zone_{FakeZones._id_counter}'
+        z = FakeZone(zone_id, name, ttl or 3600)
         z.mode = mode
-        self._zones[name] = z
+        self._zones[zone_id] = z
         self._by_name[name] = z
         return z
 
@@ -525,3 +530,105 @@ class TestHCloudAdapter(TestCase):
             self.assertNotIn(None, self.client._zone_cache)
         finally:
             self.client._zones.create = orig_create
+
+    def test_rrset_upsert_apex_with_at_sign(self):
+        """Test that apex records with '@' name are matched correctly.
+
+        The hcloud API returns '@' for apex records, but octodns uses ''.
+        This tests the fix for the 'RRSet already exists' error when
+        updating multi-value apex TXT records.
+
+        Bug reproduction: When removing a value from a multi-valued TXT
+        record at apex, the update fails because '@' != '' in name matching.
+        """
+        # Add an apex TXT record with '@' name (as hcloud API returns)
+        z = self.client._zones.get_by_id('z1')
+        z.rrsets.append(
+            FakeRRSet('rr_apex_txt', '@', 'TXT', 300, ['"value1"', '"value2"'])
+        )
+        # Clear any previous created_rrset tracking
+        z.created_rrset = None
+
+        # Update with one fewer value using '' name (as octodns uses)
+        self.client.rrset_upsert('z1', '', 'TXT', ['value1'], 300)
+
+        # Should have updated existing rrset, not created new one
+        apex_txt = [
+            r for r in z.rrsets if r.type == 'TXT' and r.name in ('@', '')
+        ][0]
+        self.assertEqual(['"value1"'], [r.value for r in apex_txt.records])
+
+        # Verify create_rrset was NOT called (which would indicate the bug)
+        # If created_rrset was set to a TXT record, the bug is present
+        if z.created_rrset is not None:
+            self.assertNotEqual(
+                'TXT',
+                z.created_rrset.get('type'),
+                "Bug: create_rrset called instead of set_rrset_records for apex TXT",
+            )
+
+    def test_rrset_delete_apex_with_at_sign(self):
+        """Test that apex records with '@' name can be deleted using ''.
+
+        The hcloud API returns '@' for apex records, but octodns uses ''.
+        This verifies deletion works correctly with the name normalization.
+        """
+        z = self.client._zones.get_by_id('z1')
+        z.rrsets.append(FakeRRSet('rr_apex_mx', '@', 'MX', 300, ['10 mail.']))
+
+        # Delete using '' name (as octodns uses)
+        self.client.rrset_delete('z1', '', 'MX')
+
+        # Should be deleted
+        self.assertFalse(
+            any(r.type == 'MX' and r.name in ('@', '') for r in z.rrsets),
+            "Bug: MX record with '@' name was not deleted when using ''",
+        )
+
+    def test_zone_recreation_clears_stale_cache(self):
+        """Test that recreating a zone after deletion handles stale cache.
+
+        BUG: When a zone is deleted externally and recreated, the adapter's
+        _zone_cache still contains the old zone object, and operations using
+        the old zone_id may incorrectly use the stale cached zone.
+
+        This test should FAIL with current code, demonstrating the bug.
+        """
+        # Step 1: Create zone
+        result1 = self.client.zone_create('recreation.test', 3600)
+        zone_id_1 = result1['id']
+
+        # Step 2: Add a record
+        self.client.rrset_upsert(zone_id_1, 'www', 'A', ['1.2.3.4'], 300)
+
+        # Verify zone is cached
+        self.assertIn(zone_id_1, self.client._zone_cache)
+
+        # Step 3: Simulate external deletion (remove from API but cache remains)
+        del self.client._zones._zones[zone_id_1]
+        del self.client._zones._by_name['recreation.test']
+
+        # Verify zone is deleted from API but cache is stale
+        self.assertIn(
+            zone_id_1,
+            self.client._zone_cache,
+            "Setup error: zone should still be in cache after external deletion",
+        )
+
+        # Step 4: Recreate zone (should get new ID)
+        result2 = self.client.zone_create('recreation.test', 3600)
+        zone_id_2 = result2['id']
+
+        # Step 5: Add records to recreated zone
+        self.client.rrset_upsert(zone_id_2, 'www', 'A', ['2.3.4.5'], 300)
+
+        # Step 6: Verify records in new zone
+        new_zone = self.client._zones.get_by_id(zone_id_2)
+        a_recs = [r for r in new_zone.rrsets if r.type == 'A']
+        self.assertEqual(1, len(a_recs))
+
+        # BUG CHECK: Old zone_id should NOT be usable via _get_zone_by_id_or_name
+        # With current code, this returns the stale cached zone object!
+        # This assertion will FAIL, demonstrating the bug.
+        with self.assertRaises(KeyError):
+            self.client._get_zone_by_id_or_name(zone_id_1)
