@@ -91,6 +91,25 @@ class FakeZone:
         return False
 
 
+class FakeAction:
+    """Fake action object that mimics hcloud's BoundAction."""
+
+    def __init__(self):
+        self.status = 'running'
+
+    def wait_until_finished(self):
+        """Wait for action to complete (mimics hcloud API)."""
+        self.status = 'success'
+
+
+class FakeCreateResponse:
+    """Fake response object for zone creation."""
+
+    def __init__(self, zone):
+        self.zone = zone
+        self.action = FakeAction()
+
+
 class FakeZones:
     _id_counter = 0  # Class-level counter for unique zone IDs
 
@@ -125,6 +144,9 @@ class FakeZones:
             name: Zone name (required)
             mode: Zone mode, 'primary' or 'secondary' (required)
             ttl: Default TTL for the zone (optional)
+
+        Returns:
+            FakeCreateResponse with zone and action attributes.
         """
         # Generate unique zone ID (real API returns unique IDs)
         FakeZones._id_counter += 1
@@ -133,7 +155,7 @@ class FakeZones:
         z.mode = mode
         self._zones[zone_id] = z
         self._by_name[name] = z
-        return z
+        return FakeCreateResponse(z)
 
     def create_rrset(self, zone, name, type, records, ttl):
         """Create RRSet (mimics hcloud API with zone parameter)."""

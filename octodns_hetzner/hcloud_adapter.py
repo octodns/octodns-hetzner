@@ -166,7 +166,17 @@ class HCloudZonesClient:
         kwargs = {'name': name, 'mode': mode}
         if ttl is not None:
             kwargs['ttl'] = ttl
-        zone = create(**kwargs)
+
+        # Create zone - returns response with action and zone
+        resp = create(**kwargs)
+
+        # Wait for zone creation to complete (handles eventual consistency)
+        action = getattr(resp, 'action', None)
+        if action is not None and hasattr(action, 'wait_until_finished'):
+            action.wait_until_finished()
+
+        # Get zone from response (could be resp.zone or resp directly)
+        zone = getattr(resp, 'zone', resp)
 
         # Cache zone object to handle API eventual consistency
         zone_id = getattr(zone, 'id', None)
