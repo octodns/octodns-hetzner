@@ -82,6 +82,17 @@ class FakeZone:
         ]
         return rrset
 
+    def update_rrset(self, rrset, name, type, records, ttl):
+        """Update existing rrset with new records and TTL."""
+        rrset.name = name or ''
+        rrset.type = type
+        rrset.records = [
+            FakeRecord(v['value'] if isinstance(v, dict) else v.value)
+            for v in records
+        ]
+        rrset.ttl = ttl
+        return rrset
+
     def delete_rrset(self, rrset):
         """Delete rrset by object reference."""
         if rrset in self.rrsets:
@@ -166,22 +177,6 @@ class FakeZones:
         rr = FakeRRSet('new2', name or '', type, ttl, values)
         zone.rrsets.append(rr)
         return rr
-
-    def update_rrset(self, rrset, name, type, records, ttl):
-        """Update RRSet (mimics hcloud API with rrset parameter)."""
-        rrset.updated = {
-            'name': name,
-            'type': type,
-            'records': records,
-            'ttl': ttl,
-        }
-        # Handle both dict and object formats (for ZoneRecord compatibility)
-        rrset.records = [
-            FakeRecord(r['value'] if isinstance(r, dict) else r.value)
-            for r in records
-        ]
-        rrset.ttl = ttl
-        return rrset
 
     def delete_rrset(self, rrset):
         """Delete RRSet (mimics hcloud API with rrset parameter)."""
@@ -296,7 +291,11 @@ class TestHCloudAdapter(TestCase):
         self.client.rrset_upsert('z1', '', 'A', ['1.2.3.4', '2.2.3.4'], 300)
         # Verify rrset now has 2 records
         z = self.client._zones.get_by_id('z1')
-        a_rr = [r for r in z.rrsets if r.type == 'A' and r.name == ''][0]
+        a_rr = [
+            r
+            for r in z.rrsets
+            if r.type == 'A' and (r.name == '' or r.name == '@')
+        ][0]
         self.assertEqual(
             ['1.2.3.4', '2.2.3.4'], [r.value for r in a_rr.records]
         )

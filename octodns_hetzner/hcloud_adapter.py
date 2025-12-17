@@ -13,6 +13,7 @@ Notes
   fallback of 3600 seconds is used.
 """
 
+import logging
 from typing import Any, Dict, List
 
 DEFAULT_TTL = 3600
@@ -35,6 +36,7 @@ class HCloudZonesClient:
         self._zone_cache = (
             {}
         )  # Cache zone objects to handle eventual consistency
+        self._log = logging.getLogger(__name__)
 
         # Try to import ZoneRecord; fallback to a minimal compatible class for tests
         try:
@@ -249,9 +251,22 @@ class HCloudZonesClient:
                 name=name or '@', type=_type, records=recs, ttl=ttl
             )
         else:
-            # Update records only (TTL preserved from existing RRSet).
-            # set_rrset_records does not accept ttl; use change_rrset_ttl if needed.
-            return zone.set_rrset_records(rrset=target, records=recs)
+            # Update existing RRSet with new records and TTL
+            # update_rrset accepts both records and ttl parameters
+            self._log.debug(
+                'Updating existing RRSet: name=%s, type=%s, ttl=%d, values=%s',
+                name or '@',
+                _type,
+                ttl,
+                recs,
+            )
+            return zone.update_rrset(
+                rrset=target,
+                name=name or '@',
+                type=_type,
+                records=recs,
+                ttl=ttl,
+            )
 
     def rrset_delete(self, zone_id: str, name: str, _type: str):
         zone = self._get_zone_by_id_or_name(zone_id)
