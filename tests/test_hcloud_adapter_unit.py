@@ -82,14 +82,8 @@ class FakeZone:
         ]
         return rrset
 
-    def update_rrset(self, rrset, name, type, records, ttl):
-        """Update existing rrset with new records and TTL."""
-        rrset.name = name or ''
-        rrset.type = type
-        rrset.records = [
-            FakeRecord(v['value'] if isinstance(v, dict) else v.value)
-            for v in records
-        ]
+    def change_rrset_ttl(self, rrset, ttl):
+        """Update rrset TTL (matches real hcloud API)."""
         rrset.ttl = ttl
         return rrset
 

@@ -251,8 +251,8 @@ class HCloudZonesClient:
                 name=name or '@', type=_type, records=recs, ttl=ttl
             )
         else:
-            # Update existing RRSet with new records and TTL
-            # update_rrset accepts both records and ttl parameters
+            # Update existing RRSet: records first, then TTL
+            # hcloud API requires separate calls for records and TTL updates
             self._log.debug(
                 'Updating existing RRSet: name=%s, type=%s, ttl=%d, values=%s',
                 name or '@',
@@ -260,13 +260,9 @@ class HCloudZonesClient:
                 ttl,
                 recs,
             )
-            return zone.update_rrset(
-                rrset=target,
-                name=name or '@',
-                type=_type,
-                records=recs,
-                ttl=ttl,
-            )
+            zone.set_rrset_records(rrset=target, records=recs)
+            zone.change_rrset_ttl(rrset=target, ttl=ttl)
+            return target
 
     def rrset_delete(self, zone_id: str, name: str, _type: str):
         zone = self._get_zone_by_id_or_name(zone_id)

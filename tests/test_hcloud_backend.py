@@ -229,33 +229,3 @@ class TestHetznerProviderHCloud(TestCase):
         client.rrset_upsert.assert_called_once_with(
             'unit.tests', '', 'A', ['1.2.3.4', '5.6.7.8'], 600
         )
-
-    def test_apply_change_rrset_ttl_alternative_method(self):
-        """Verify alternative change_rrset_ttl method works."""
-        from unittest.mock import Mock
-
-        from octodns_hetzner.hcloud_adapter import HCloudZonesClient
-
-        # Test the alternative method exists and can be called
-        mock_zone = Mock()
-        mock_rrset = Mock()
-        mock_rrset.ttl = 300
-
-        adapter = HCloudZonesClient('test_token')
-
-        # Mock the get zone methods to return our mock objects
-        adapter._get_zone_by_id_or_name = Mock(return_value=mock_zone)
-        adapter._get_rrsets = Mock(return_value=[mock_rrset])
-
-        # Call change_rrset_ttl directly if method exists
-        if hasattr(mock_zone, 'change_rrset_ttl'):
-            mock_zone.change_rrset_ttl(rrset=mock_rrset, ttl=600)
-            # Verify it was called
-            mock_zone.change_rrset_ttl.assert_called_once_with(
-                rrset=mock_rrset, ttl=600
-            )
-        else:
-            # Method not available - this is expected for some hcloud versions
-            self.skipTest(
-                "change_rrset_ttl method not available in this hcloud version"
-            )
