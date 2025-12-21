@@ -54,6 +54,10 @@ class FakeZone:
         self.rrsets = rrsets or []
         self.created_rrset = None
 
+    def get_rrset_all(self):
+        """Get all RRSets for this zone (mimics hcloud API)."""
+        return self.rrsets
+
     def create_rrset(self, name, type, records, ttl):
         # Handle both dict and object formats (for ZoneRecord compatibility)
         values = [
@@ -476,6 +480,32 @@ class TestHCloudAdapter(TestCase):
             self.assertEqual([], rrsets)
         finally:
             self.client._zones.get_rrset_all = orig_get_rrset_all
+
+    def test_get_rrsets_zone_method_exception(self):
+        """Test exception handling when zone.get_rrset_all() raises."""
+
+        # Create a zone with get_rrset_all() that raises
+        class ZoneWithFailingMethod:
+            def get_rrset_all(self):
+                raise RuntimeError('zone.get_rrset_all failed')
+
+            rrsets = []
+
+        z = ZoneWithFailingMethod()
+        # Should fall back to zone.rrsets attribute
+        rrsets = self.client._get_rrsets(z)
+        self.assertEqual([], rrsets)
+
+    def test_get_rrsets_empty_rrsets_attribute(self):
+        """Test that empty rrsets list is returned correctly."""
+
+        # Create a zone with empty rrsets list
+        class ZoneWithEmptyRRSets:
+            rrsets = []
+
+        z = ZoneWithEmptyRRSets()
+        rrsets = self.client._get_rrsets(z)
+        self.assertEqual([], rrsets)
 
     def test_zonerecord_fallback(self):
         """Test fallback ZoneRecord class when hcloud.zones.domain unavailable."""

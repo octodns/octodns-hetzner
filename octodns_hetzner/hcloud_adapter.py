@@ -325,9 +325,20 @@ class HCloudZonesClient:
         raise KeyError(f'Zone not found: {zone_id_or_name}')
 
     def _get_rrsets(self, zone: Any) -> List[Any]:
+        # First try zone.get_rrset_all() - the proper hcloud API
+        gr = getattr(zone, 'get_rrset_all', None)
+        if callable(gr):
+            try:
+                return gr() or []
+            except Exception:
+                pass
+
+        # Fallback: check zone.rrsets attribute (for tests/mocks)
         rrsets = getattr(zone, 'rrsets', None)
         if rrsets is not None:
             return rrsets or []
+
+        # Final fallback: try zones client method (legacy)
         gr = getattr(self._zones, 'get_rrset_all', None)
         if callable(gr):
             try:
