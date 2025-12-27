@@ -95,6 +95,23 @@ zones:
 
 HetznerProvider supports A, AAAA, CAA, CNAME, DS, MX, NS, PTR, SRV, TLSA, and TXT
 
+#### TXT Records and DKIM
+
+Long TXT records (such as DKIM keys exceeding 255 characters) are automatically
+chunked into RFC-compliant format when using the `hcloud` backend. For DKIM keys,
+configure them as a single TXT value in your zone file:
+
+```yaml
+dkim._domainkey:
+  type: TXT
+  value: "v=DKIM1\\;k=rsa\\;p=MIIBIjANBgkqh...very-long-key..."
+```
+
+The provider will automatically split values exceeding 255 characters into
+properly quoted chunks (e.g., `"chunk1" "chunk2"`). Do not manually split long
+values into multiple `values:` entries unless you specifically need multiple
+distinct TXT records (such as for site verification).
+
 #### Root NS Records
 
 HetznerProvider supports full root NS record management.
