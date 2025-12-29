@@ -3,12 +3,13 @@
 #
 
 import logging
-import shlex
 from collections import defaultdict
 
 from octodns.provider.base import BaseProvider
 from octodns.record import Record
+from octodns.record.caa import CaaValue
 from octodns.record.ds import DsValue
+from octodns.record.rr import RrParseError
 from octodns.record.tlsa import TlsaValue
 
 # Import exceptions for backward compatibility
@@ -173,14 +174,9 @@ class HetznerProvider(BaseProvider):
         for record in records:
             raw = record["value"]
             try:
-                parts = shlex.split(raw)
-                if len(parts) < 3:
-                    raise ValueError("CAA rdata must have at least 3 tokens")
-                flags = int(parts[0])
-                tag = parts[1]
-                value = parts[2]
-                values.append({"flags": flags, "tag": tag, "value": value})
-            except Exception as e:
+                parsed = CaaValue.parse_rdata_text(raw)
+                values.append(parsed)
+            except RrParseError as e:
                 # Fallback best-effort for unexpected formats
                 self.log.warning(
                     "_data_for_CAA: failed to parse CAA record %r: %s, "
