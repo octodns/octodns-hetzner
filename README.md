@@ -12,22 +12,12 @@ pip install octodns-hetzner
 
 #### requirements.txt/setup.py
 
-Pinning specific versions or SHAs is recommended to avoid unplanned upgrades.
-
-##### Versions
-
-```
-# Start with the latest versions and don't just copy what's here
-octodns==0.9.14
-octodns-hetzner==0.0.1
-```
-
-##### SHAs
+Pin specific versions or SHAs in your project to control upgrades. Refer to
+PyPI for current releases. Minimum requirements align with `setup.py`, e.g.:
 
 ```
-# Start with the latest/specific versions and don't just copy what's here
--e git+https://git@github.com/octodns/octodns.git@9da19749e28f68407a1c246dfdf65663cdc1c422#egg=octodns
--e git+https://git@github.com/octodns/octodns-hetzner.git@ec9661f8b335241ae4746eea467a8509205e6a30#egg=octodns_hetzner
+octodns>=1.5.0
+octodns-hetzner>=1.0.0
 ```
 
 ### Configuration
@@ -38,13 +28,89 @@ providers:
     class: octodns_hetzner.HetznerProvider
     # Your Hetzner API token (required)
     token: env/HETZNER_TOKEN
+    # Choose backend during transition to Cloud Zones API
+    # - dnsapi (default): uses Hetzner DNS Console API (current behavior)
+    # - hcloud: uses Hetzner Cloud API (Zones). Requires a Cloud API token
+    backend: dnsapi
 ```
+
+### Backends
+
+- `dnsapi` (default): uses Hetzner DNS Console API with DNS tokens. Backward compatible with existing setups.
+- `hcloud`: uses Hetzner Cloud API Zones via the official `hcloud` client. Requires a Hetzner Cloud API token. The `hcloud` client library is installed as a dependency of this package.
+
+Both backends will co-exist until at least May 2026. The default remains `dnsapi`; opt into `hcloud` when ready.
+
+Note: The `hcloud` backend is new and may evolve. Apply (writes) are implemented via RRSet semantics in the provider, with a thin adapter using the official `hcloud` client. When zone/rrset TTLs are unavailable from the API, a conservative fallback of `3600` seconds is used.
+
+### Zone-by-Zone Migration
+
+You can configure multiple provider instances with different backends to migrate zones gradually:
+
+```yaml
+providers:
+  hetzner-dns:
+    class: octodns_hetzner.HetznerProvider
+    token: env/HETZNER_DNS_TOKEN
+    backend: dnsapi
+
+  hetzner-cloud:
+    class: octodns_hetzner.HetznerProvider
+    token: env/HETZNER_CLOUD_TOKEN
+    backend: hcloud
+
+zones:
+  # Legacy zone still using DNS Console API
+  legacy.example.com.:
+    sources:
+      - hetzner-dns
+    targets:
+      - hetzner-dns
+
+  # Zone migrated to Cloud Zones API
+  migrated.example.com.:
+    sources:
+      - hetzner-cloud
+    targets:
+      - hetzner-cloud
+```
+
+**Migration Steps**:
+
+1. **Prepare**: Ensure you have a Hetzner Cloud API token available for `hcloud`.
+2. **Configure**: Add a second provider instance with `backend: hcloud` and the Cloud API token
+3. **Test**: Run `octodns-sync --dry-run` to validate the new provider can read zones
+4. **Migrate**: Update zone configuration to use the new provider
+5. **Verify**: Confirm DNS records are identical using `octodns-compare`
+6. **Repeat**: Migrate remaining zones one at a time
+
+**Token Requirements**:
+- `dnsapi` backend: Requires DNS Console API token (from DNS Console)
+- `hcloud` backend: Requires Hetzner Cloud API token (from Cloud Console)
+- Tokens are **not interchangeable** between backends
 
 ### Support Information
 
 #### Records
 
-HetznerProvider supports A, AAAA, CAA, CNAME, MX, NS, SRV, and TXT
+HetznerProvider supports A, AAAA, CAA, CNAME, DS, MX, NS, PTR, SRV, TLSA, and TXT
+
+#### TXT Records and DKIM
+
+Long TXT records (such as DKIM keys exceeding 255 characters) are automatically
+chunked into RFC-compliant format when using the `hcloud` backend. For DKIM keys,
+configure them as a single TXT value in your zone file:
+
+```yaml
+dkim._domainkey:
+  type: TXT
+  value: "v=DKIM1\\;k=rsa\\;p=MIIBIjANBgkqh...very-long-key..."
+```
+
+The provider will automatically split values exceeding 255 characters into
+properly quoted chunks (e.g., `"chunk1" "chunk2"`). Do not manually split long
+values into multiple `values:` entries unless you specifically need multiple
+distinct TXT records (such as for site verification).
 
 #### Root NS Records
 

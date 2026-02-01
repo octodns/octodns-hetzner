@@ -15,3 +15,21 @@ filterwarnings = [
     'error',
 ]
 pythonpath = "."
+
+[tool.coverage.run]
+omit = [
+    "*/clients.py",  # Protocol-only file, no implementation to test
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
+    "\\.\\.\\.",  # Protocol method stubs
+]
