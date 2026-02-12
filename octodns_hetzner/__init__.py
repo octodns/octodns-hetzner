@@ -20,7 +20,7 @@ from .exceptions import (
 )
 
 # TODO: remove __VERSION__ with the next major version release
-__version__ = __VERSION__ = '1.0.0'
+__version__ = __VERSION__ = '2.0.0'
 
 # Export for backward compatibility; guard HetznerClient on successful import
 __all__ = [
