@@ -66,10 +66,17 @@ class DNSAPIStrategy:
     - Create: Create each value as a separate record
     - Update: Delete existing records, then create new ones
     - Delete: Delete each matching record individually
+
+    Note: labels are not supported by the dnsapi backend and are ignored.
     """
 
     def apply_create(
-        self, client, zone_id: str, change, params_generator: Callable
+        self,
+        client,
+        zone_id: str,
+        change,
+        params_generator: Callable,
+        labels=None,
     ) -> None:
         """Create records one by one."""
         new = change.new
@@ -89,6 +96,7 @@ class DNSAPIStrategy:
         change,
         params_generator: Callable,
         zone_records: List = None,
+        labels=None,
     ) -> None:
         """Update via delete-then-create strategy."""
         # It's simpler to delete-then-recreate than to update
@@ -115,17 +123,24 @@ class HCloudStrategy:
     - Create: Upsert entire RRSet with all values
     - Update: Upsert (RRSet replacement is idempotent)
     - Delete: Delete entire RRSet for name+type
+
+    Labels (key/value pairs) are passed through to the hcloud API when provided.
     """
 
     def apply_create(
-        self, client, zone_id: str, change, params_generator: Callable
+        self,
+        client,
+        zone_id: str,
+        change,
+        params_generator: Callable,
+        labels=None,
     ) -> None:
         """Create/upsert entire RRSet."""
         new = change.new
         # Collect all values for the RRSet
         values = [p['value'] for p in params_generator(new)]
-        # Single RRSet upsert with all values
-        client.rrset_upsert(zone_id, new.name, new._type, values, new.ttl)
+        # Single RRSet upsert with all values and optional labels
+        client.rrset_upsert(zone_id, new.name, new._type, values, new.ttl, labels=labels)
 
     def apply_update(
         self,
@@ -134,11 +149,12 @@ class HCloudStrategy:
         change,
         params_generator: Callable,
         zone_records: List = None,
+        labels=None,
     ) -> None:
         """Update via RRSet replacement (idempotent upsert)."""
         # RRSet upsert is idempotent - just upsert the new values
         # zone_records not needed for RRSet-based updates
-        self.apply_create(client, zone_id, change, params_generator)
+        self.apply_create(client, zone_id, change, params_generator, labels=labels)
 
     def apply_delete(
         self, client, zone_id: str, change, zone_records: List

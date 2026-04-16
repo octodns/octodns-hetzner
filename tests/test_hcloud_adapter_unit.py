@@ -16,12 +16,13 @@ class FakeRecord:
 
 
 class FakeRRSet:
-    def __init__(self, _id, name, _type, ttl, values):
+    def __init__(self, _id, name, _type, ttl, values, labels=None):
         self.id = _id
         self.name = name
         self.type = _type
         self.ttl = ttl
         self.records = [FakeRecord(v) for v in values]
+        self.labels = labels or {}
         self.updated = None
         self.deleted = False
 
@@ -58,20 +59,25 @@ class FakeZone:
         """Get all RRSets for this zone (mimics hcloud API)."""
         return self.rrsets
 
-    def create_rrset(self, name, type, records, ttl):
+    def create_rrset(self, name, type, records, ttl, labels=None):
         # Handle both dict and object formats (for ZoneRecord compatibility)
         values = [
             r["value"] if isinstance(r, dict) else r.value for r in records
         ]
-        rr = FakeRRSet("new", name or "", type, ttl, values)
+        rr = FakeRRSet("new", name or "", type, ttl, values, labels=labels)
         self.rrsets.append(rr)
         self.created_rrset = {
             "name": name,
             "type": type,
             "records": records,
             "ttl": ttl,
+            "labels": labels,
         }
         return self.created_rrset
+
+    def update_rrset(self, rrset, labels=None):
+        rrset.labels = labels or {}
+        return rrset
 
     def set_rrset_records(self, rrset, records):
         """Update rrset records (the correct API for updating records).
@@ -166,13 +172,13 @@ class FakeZones:
         self._by_name[name] = z
         return FakeCreateResponse(z)
 
-    def create_rrset(self, zone, name, type, records, ttl):
+    def create_rrset(self, zone, name, type, records, ttl, labels=None):
         """Create RRSet (mimics hcloud API with zone parameter)."""
         # Handle both dict and object formats (for ZoneRecord compatibility)
         values = [
             r["value"] if isinstance(r, dict) else r.value for r in records
         ]
-        rr = FakeRRSet("new2", name or "", type, ttl, values)
+        rr = FakeRRSet("new2", name or "", type, ttl, values, labels=labels)
         zone.rrsets.append(rr)
         return rr
 
@@ -689,3 +695,57 @@ class TestHCloudAdapter(TestCase):
         # because zone_create clears stale cache entries for the same zone name
         with self.assertRaises(KeyError):
             self.client._get_zone_by_id_or_name(zone_id_1)
+
+    def test_zone_records_get_includes_labels(self):
+        """Test that labels from RRSets are included in flattened records."""
+        z = self.client._zones.get_by_id("z1")
+        z.rrsets.append(
+            FakeRRSet(
+                "rr_labeled",
+                "mail",
+                "MX",
+                300,
+                ["10 smtp.example."],
+                labels={"env": "prod", "app": "mail"},
+            )
+        )
+        recs = self.client.zone_records_get("z1")
+        labeled = [r for r in recs if r.get("name") == "mail" and r.get("type") == "MX"]
+        self.assertEqual(1, len(labeled))
+        self.assertEqual({"env": "prod", "app": "mail"}, labeled[0]["labels"])
+
+    def test_zone_records_get_no_labels_omits_key(self):
+        """Test that records without labels don't include the 'labels' key."""
+        recs = self.client.zone_records_get("z1")
+        a_recs = [r for r in recs if r.get("type") == "A"]
+        self.assertTrue(len(a_recs) > 0)
+        for r in a_recs:
+            self.assertNotIn("labels", r)
+
+    def test_rrset_upsert_create_with_labels(self):
+        """Test that labels are passed when creating a new RRSet."""
+        labels = {"env": "staging", "owner": "team-a"}
+        self.client.rrset_upsert("z1", "api", "A", ["10.0.0.1"], 300, labels=labels)
+        z = self.client._zones.get_by_id("z1")
+        new_rr = [r for r in z.rrsets if r.type == "A" and r.name == "api"]
+        self.assertEqual(1, len(new_rr))
+        self.assertEqual(labels, new_rr[0].labels)
+
+    def test_rrset_upsert_update_with_labels(self):
+        """Test that labels are applied when updating an existing RRSet."""
+        labels = {"env": "prod"}
+        self.client.rrset_upsert("z1", "", "A", ["1.2.3.4", "9.9.9.9"], 300, labels=labels)
+        z = self.client._zones.get_by_id("z1")
+        a_rr = [r for r in z.rrsets if r.type == "A" and r.name in ("", "@")][0]
+        self.assertEqual(labels, a_rr.labels)
+
+    def test_rrset_upsert_update_without_labels_preserves_existing(self):
+        """Test that omitting labels on update leaves existing labels unchanged."""
+        z = self.client._zones.get_by_id("z1")
+        # Pre-assign labels to existing A rrset
+        a_rr = [r for r in z.rrsets if r.type == "A"][0]
+        a_rr.labels = {"env": "prod"}
+        # Update without specifying labels
+        self.client.rrset_upsert("z1", "", "A", ["1.2.3.4", "2.2.2.2"], 300)
+        # Labels should remain unchanged
+        self.assertEqual({"env": "prod"}, a_rr.labels)

@@ -92,6 +92,7 @@ class HCloudZonesClient:
         """Return flattened per-record dicts derived from RRsets.
 
         Output keys: 'id', 'type', 'name', 'value', 'ttl', 'zone_id'.
+        Labels (key/value pairs) are included as 'labels' when present on the RRSet.
         """
         zone = self._get_zone_by_id_or_name(zone_id)
         rrsets = self._get_rrsets(zone)
@@ -107,32 +108,40 @@ class HCloudZonesClient:
             name = getattr(rrset, 'name', '') or ''
             if name == '@':
                 name = ''
+            labels = getattr(rrset, 'labels', None) or {}
             for rec in getattr(rrset, 'records', []) or []:
                 value = getattr(rec, 'value', None)
                 # Construct a synthetic id from rrset + value to support deletes
                 rid = f'{getattr(rrset, "id", "")}:{value}'
-                records.append(
-                    {
-                        'id': rid,
-                        'type': rtype,
-                        'name': name,
-                        'value': value,
-                        'ttl': ttl,
-                        'zone_id': zone_id,
-                    }
-                )
+                record: Dict = {
+                    'id': rid,
+                    'type': rtype,
+                    'name': name,
+                    'value': value,
+                    'ttl': ttl,
+                    'zone_id': zone_id,
+                }
+                if labels:
+                    record['labels'] = labels
+                records.append(record)
         return records
 
     # --- Write methods (Phase 1: explicit non-support) --------------------
 
     def zone_record_create(
-        self, zone_id: str, name: str, _type: str, value: str, ttl: int = None
+        self,
+        zone_id: str,
+        name: str,
+        _type: str,
+        value: str,
+        ttl: int = None,
+        labels: Dict = None,
     ):
         """Compatibility shim: upsert a single value into the RRSet.
 
         Provider may call this in legacy flows; prefer rrset_upsert.
         """
-        return self.rrset_upsert(zone_id, name, _type, [value], ttl)
+        return self.rrset_upsert(zone_id, name, _type, [value], ttl, labels=labels)
 
     def zone_record_delete(self, zone_id: str, record_id: str):
         """Compatibility shim: record_id is synthetic '<rrset_id>:<value>'.
@@ -216,11 +225,19 @@ class HCloudZonesClient:
     # --- RRSet operations --------------------------------------------------
 
     def rrset_upsert(
-        self, zone_id: str, name: str, _type: str, values: List[str], ttl: int
+        self,
+        zone_id: str,
+        name: str,
+        _type: str,
+        values: List[str],
+        ttl: int,
+        labels: Dict = None,
     ):
         """Replace or create RRSet for (name, type) with provided values.
 
         This is the primary mutation primitive used by the provider.
+        Labels are optional key/value pairs stored on the RRSet. Pass a non-empty
+        dict to set labels; omit or pass None to leave existing labels untouched.
         """
         zone = self._get_zone_by_id_or_name(zone_id)
         # Try to locate existing rrset
@@ -248,7 +265,11 @@ class HCloudZonesClient:
         if target is None:
             # Create new rrset using zone.create_rrset - TTL is accepted here
             return zone.create_rrset(
-                name=name or '@', type=_type, records=recs, ttl=ttl
+                name=name or '@',
+                type=_type,
+                records=recs,
+                ttl=ttl,
+                labels=labels if labels else None,
             )
         else:
             # Update existing RRSet: records first, then TTL
@@ -262,6 +283,8 @@ class HCloudZonesClient:
             )
             zone.set_rrset_records(rrset=target, records=recs)
             zone.change_rrset_ttl(rrset=target, ttl=ttl)
+            if labels:
+                zone.update_rrset(rrset=target, labels=labels)
             return target
 
     def rrset_delete(self, zone_id: str, name: str, _type: str):

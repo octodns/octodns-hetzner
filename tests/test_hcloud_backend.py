@@ -67,9 +67,9 @@ class TestHetznerProviderHCloud(TestCase):
         # TXT values are pre-quoted via chunked_values for hcloud backend
         client.rrset_upsert.assert_has_calls(
             [
-                call("unit.tests", "", "A", ["1.2.3.4", "1.2.3.5"], 300),
-                call("unit.tests", "www", "CNAME", ["unit.tests."], 300),
-                call("unit.tests", "txt", "TXT", ['"a"', '"b"'], 600),
+                call("unit.tests", "", "A", ["1.2.3.4", "1.2.3.5"], 300, labels=None),
+                call("unit.tests", "www", "CNAME", ["unit.tests."], 300, labels=None),
+                call("unit.tests", "txt", "TXT", ['"a"', '"b"'], 600, labels=None),
             ],
             any_order=True,
         )
@@ -110,7 +110,7 @@ class TestHetznerProviderHCloud(TestCase):
         provider.apply(plan)
 
         client.rrset_upsert.assert_called_once_with(
-            "unit.tests", "", "A", ["1.2.3.4", "2.2.3.4"], 300
+            "unit.tests", "", "A", ["1.2.3.4", "2.2.3.4"], 300, labels=None
         )
 
     def test_apply_delete_rrset(self):
@@ -228,7 +228,7 @@ class TestHetznerProviderHCloud(TestCase):
 
         # Verify rrset_upsert was called with new TTL=600
         client.rrset_upsert.assert_called_once_with(
-            "unit.tests", "", "A", ["1.2.3.4", "5.6.7.8"], 600
+            "unit.tests", "", "A", ["1.2.3.4", "5.6.7.8"], 600, labels=None
         )
 
     def test_txt_long_value_chunked(self):
@@ -429,3 +429,179 @@ class TestHetznerProviderHCloud(TestCase):
         chunked_value = values[0]
         self.assertTrue(chunked_value.startswith('"'))
         self.assertTrue(chunked_value.endswith('"'))
+
+    def test_populate_stores_labels_in_octodns_metadata(self):
+        """Test that labels from hcloud API are stored in record.octodns['hetzner']."""
+        provider, client = self._provider_with_mock_client()
+
+        client.zone_get.return_value = {
+            "id": "unit.tests",
+            "name": "unit.tests",
+            "ttl": 3600,
+        }
+        client.zone_records_get.return_value = [
+            {
+                "id": "rr1:1.2.3.4",
+                "type": "A",
+                "name": "www",
+                "value": "1.2.3.4",
+                "ttl": 300,
+                "zone_id": "unit.tests",
+                "labels": {"env": "prod", "app": "web"},
+            }
+        ]
+
+        zone = Zone("unit.tests.", [])
+        provider.populate(zone)
+
+        self.assertEqual(1, len(zone.records))
+        record = list(zone.records)[0]
+        self.assertEqual({"env": "prod", "app": "web"}, record.octodns.get("hetzner", {}).get("labels"))
+
+    def test_populate_no_labels_no_metadata(self):
+        """Test that records without labels don't get hetzner metadata."""
+        provider, client = self._provider_with_mock_client()
+
+        client.zone_get.return_value = {
+            "id": "unit.tests",
+            "name": "unit.tests",
+            "ttl": 3600,
+        }
+        client.zone_records_get.return_value = [
+            {
+                "id": "rr1:1.2.3.4",
+                "type": "A",
+                "name": "www",
+                "value": "1.2.3.4",
+                "ttl": 300,
+                "zone_id": "unit.tests",
+            }
+        ]
+
+        zone = Zone("unit.tests.", [])
+        provider.populate(zone)
+
+        record = list(zone.records)[0]
+        self.assertEqual({}, record.octodns.get("hetzner", {}))
+
+    def test_apply_create_with_labels_passes_to_rrset_upsert(self):
+        """Test that labels in octodns metadata are passed to rrset_upsert."""
+        provider, client = self._provider_with_mock_client()
+
+        client.zone_get.side_effect = IndexError("zone not found")
+        client.zone_create.return_value = {
+            "id": "unit.tests",
+            "name": "unit.tests",
+            "ttl": 3600,
+        }
+        client.zone_records_get.return_value = []
+
+        zone = Zone("unit.tests.", [])
+        record = Record.new(
+            zone,
+            "api",
+            {"ttl": 300, "type": "A", "values": ["1.2.3.4"]},
+        )
+        record.octodns["hetzner"] = {"labels": {"env": "prod"}}
+        zone.add_record(record)
+
+        plan = provider.plan(zone)
+        provider.apply(plan)
+
+        client.rrset_upsert.assert_called_once_with(
+            "unit.tests", "api", "A", ["1.2.3.4"], 300, labels={"env": "prod"}
+        )
+
+    def test_apply_create_without_labels_passes_none(self):
+        """Test that records without labels pass labels=None to rrset_upsert."""
+        provider, client = self._provider_with_mock_client()
+
+        client.zone_get.side_effect = IndexError("zone not found")
+        client.zone_create.return_value = {
+            "id": "unit.tests",
+            "name": "unit.tests",
+            "ttl": 3600,
+        }
+        client.zone_records_get.return_value = []
+
+        zone = Zone("unit.tests.", [])
+        zone.add_record(
+            Record.new(zone, "api", {"ttl": 300, "type": "A", "values": ["1.2.3.4"]})
+        )
+
+        plan = provider.plan(zone)
+        provider.apply(plan)
+
+        client.rrset_upsert.assert_called_once_with(
+            "unit.tests", "api", "A", ["1.2.3.4"], 300, labels=None
+        )
+
+    def test_extra_changes_detects_label_only_change(self):
+        """Test that _extra_changes generates an Update when labels change."""
+        provider, client = self._provider_with_mock_client()
+
+        client.zone_get.return_value = {
+            "id": "unit.tests",
+            "name": "unit.tests",
+            "ttl": 3600,
+        }
+        client.zone_records_get.return_value = [
+            {
+                "id": "rr1:1.2.3.4",
+                "type": "A",
+                "name": "api",
+                "value": "1.2.3.4",
+                "ttl": 300,
+                "zone_id": "unit.tests",
+                "labels": {"env": "staging"},
+            }
+        ]
+
+        # Desired has same DNS data but different labels
+        desired_zone = Zone("unit.tests.", [])
+        desired_record = Record.new(
+            desired_zone,
+            "api",
+            {"ttl": 300, "type": "A", "values": ["1.2.3.4"]},
+        )
+        desired_record.octodns["hetzner"] = {"labels": {"env": "prod"}}
+        desired_zone.add_record(desired_record)
+
+        plan = provider.plan(desired_zone)
+        self.assertIsNotNone(plan)
+        self.assertEqual(1, len(plan.changes))
+
+    def test_extra_changes_no_change_when_labels_same(self):
+        """Test that _extra_changes generates no Update when labels are identical."""
+        provider, client = self._provider_with_mock_client()
+
+        client.zone_get.return_value = {
+            "id": "unit.tests",
+            "name": "unit.tests",
+            "ttl": 3600,
+        }
+        client.zone_records_get.return_value = [
+            {
+                "id": "rr1:1.2.3.4",
+                "type": "A",
+                "name": "api",
+                "value": "1.2.3.4",
+                "ttl": 300,
+                "zone_id": "unit.tests",
+                "labels": {"env": "prod"},
+            }
+        ]
+
+        # Desired has same DNS data and same labels
+        desired_zone = Zone("unit.tests.", [])
+        desired_record = Record.new(
+            desired_zone,
+            "api",
+            {"ttl": 300, "type": "A", "values": ["1.2.3.4"]},
+        )
+        desired_record.octodns["hetzner"] = {"labels": {"env": "prod"}}
+        desired_zone.add_record(desired_record)
+
+        plan = provider.plan(desired_zone)
+        # No changes since labels match
+        self.assertIsNone(plan)
