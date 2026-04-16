@@ -6,8 +6,7 @@ import logging
 from collections import defaultdict
 
 from octodns.provider.base import BaseProvider
-from octodns.record import Record
-from octodns.record import Update
+from octodns.record import Record, Update
 from octodns.record.caa import CaaValue
 from octodns.record.ds import DsValue
 from octodns.record.rr import RrParseError

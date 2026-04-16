@@ -274,7 +274,8 @@ class HCloudZonesClient:
             ]
         else:
             recs = [
-                self._ZoneRecord(value=v, comment=comment or None) for v in values
+                self._ZoneRecord(value=v, comment=comment or None)
+                for v in values
             ]
 
         if target is None:

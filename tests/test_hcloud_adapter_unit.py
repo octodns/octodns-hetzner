@@ -65,7 +65,11 @@ class FakeZone:
         fake_records = [
             FakeRecord(
                 r["value"] if isinstance(r, dict) else r.value,
-                comment=r.get("comment") if isinstance(r, dict) else getattr(r, "comment", None),
+                comment=(
+                    r.get("comment")
+                    if isinstance(r, dict)
+                    else getattr(r, "comment", None)
+                ),
             )
             for r in records
         ]
@@ -95,7 +99,11 @@ class FakeZone:
         rrset.records = [
             FakeRecord(
                 v["value"] if isinstance(v, dict) else v.value,
-                comment=v.get("comment") if isinstance(v, dict) else getattr(v, "comment", None),
+                comment=(
+                    v.get("comment")
+                    if isinstance(v, dict)
+                    else getattr(v, "comment", None)
+                ),
             )
             for v in records
         ]
@@ -186,7 +194,11 @@ class FakeZones:
         fake_records = [
             FakeRecord(
                 r["value"] if isinstance(r, dict) else r.value,
-                comment=r.get("comment") if isinstance(r, dict) else getattr(r, "comment", None),
+                comment=(
+                    r.get("comment")
+                    if isinstance(r, dict)
+                    else getattr(r, "comment", None)
+                ),
             )
             for r in records
         ]
@@ -723,7 +735,9 @@ class TestHCloudAdapter(TestCase):
             )
         )
         recs = self.client.zone_records_get("z1")
-        labeled = [r for r in recs if r.get("name") == "mail" and r.get("type") == "MX"]
+        labeled = [
+            r for r in recs if r.get("name") == "mail" and r.get("type") == "MX"
+        ]
         self.assertEqual(1, len(labeled))
         self.assertEqual({"env": "prod", "app": "mail"}, labeled[0]["labels"])
 
@@ -738,7 +752,9 @@ class TestHCloudAdapter(TestCase):
     def test_rrset_upsert_create_with_labels(self):
         """Test that labels are passed when creating a new RRSet."""
         labels = {"env": "staging", "owner": "team-a"}
-        self.client.rrset_upsert("z1", "api", "A", ["10.0.0.1"], 300, labels=labels)
+        self.client.rrset_upsert(
+            "z1", "api", "A", ["10.0.0.1"], 300, labels=labels
+        )
         z = self.client._zones.get_by_id("z1")
         new_rr = [r for r in z.rrsets if r.type == "A" and r.name == "api"]
         self.assertEqual(1, len(new_rr))
@@ -747,7 +763,9 @@ class TestHCloudAdapter(TestCase):
     def test_rrset_upsert_update_with_labels(self):
         """Test that labels are applied when updating an existing RRSet."""
         labels = {"env": "prod"}
-        self.client.rrset_upsert("z1", "", "A", ["1.2.3.4", "9.9.9.9"], 300, labels=labels)
+        self.client.rrset_upsert(
+            "z1", "", "A", ["1.2.3.4", "9.9.9.9"], 300, labels=labels
+        )
         z = self.client._zones.get_by_id("z1")
         a_rr = [r for r in z.rrsets if r.type == "A" and r.name in ("", "@")][0]
         self.assertEqual(labels, a_rr.labels)

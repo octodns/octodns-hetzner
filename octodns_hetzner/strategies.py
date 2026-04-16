@@ -144,8 +144,13 @@ class HCloudStrategy:
         values = [p['value'] for p in params_generator(new)]
         # Single RRSet upsert with all values, optional labels and comment
         client.rrset_upsert(
-            zone_id, new.name, new._type, values, new.ttl,
-            labels=labels, comment=comment,
+            zone_id,
+            new.name,
+            new._type,
+            values,
+            new.ttl,
+            labels=labels,
+            comment=comment,
         )
 
     def apply_update(
@@ -162,7 +167,12 @@ class HCloudStrategy:
         # RRSet upsert is idempotent - just upsert the new values
         # zone_records not needed for RRSet-based updates
         self.apply_create(
-            client, zone_id, change, params_generator, labels=labels, comment=comment
+            client,
+            zone_id,
+            change,
+            params_generator,
+            labels=labels,
+            comment=comment,
         )
 
     def apply_delete(

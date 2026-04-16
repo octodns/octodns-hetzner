@@ -112,6 +112,33 @@ properly quoted chunks (e.g., `"chunk1" "chunk2"`). Do not manually split long
 values into multiple `values:` entries unless you specifically need multiple
 distinct TXT records (such as for site verification).
 
+#### Labels and Comments (hcloud backend only)
+
+The `hcloud` backend supports attaching **labels** (key/value pairs) and a **comment** to DNS records. These are stored in the `octodns` metadata block under the `hetzner` key and are synced to the Hetzner Cloud API.
+
+Labels are per-RRSet (shared across all values of a record). The comment is applied uniformly to every individual record value within the RRSet.
+
+```yaml
+www:
+  ttl: 300
+  type: A
+  values:
+    - 1.2.3.4
+    - 5.6.7.8
+  octodns:
+    hetzner:
+      comment: managed by octodns
+      labels:
+        env: prod
+        team: platform
+```
+
+Both fields are optional and independent. When a record in your zone file has no `hetzner` metadata, any labels or comment already present on the record in the API are left unchanged.
+
+**Change detection**: If only the labels or comment differ between your zone file and the current state in the API (DNS data is identical), octodns will still generate an update to sync the metadata.
+
+Labels and comments are **not supported** by the `dnsapi` backend and are silently ignored there.
+
 #### Root NS Records
 
 HetznerProvider supports full root NS record management.
