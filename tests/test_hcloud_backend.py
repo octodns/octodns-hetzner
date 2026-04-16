@@ -67,9 +67,9 @@ class TestHetznerProviderHCloud(TestCase):
         # TXT values are pre-quoted via chunked_values for hcloud backend
         client.rrset_upsert.assert_has_calls(
             [
-                call("unit.tests", "", "A", ["1.2.3.4", "1.2.3.5"], 300, labels=None),
-                call("unit.tests", "www", "CNAME", ["unit.tests."], 300, labels=None),
-                call("unit.tests", "txt", "TXT", ['"a"', '"b"'], 600, labels=None),
+                call("unit.tests", "", "A", ["1.2.3.4", "1.2.3.5"], 300, labels=None, comment=None),
+                call("unit.tests", "www", "CNAME", ["unit.tests."], 300, labels=None, comment=None),
+                call("unit.tests", "txt", "TXT", ['"a"', '"b"'], 600, labels=None, comment=None),
             ],
             any_order=True,
         )
@@ -110,7 +110,7 @@ class TestHetznerProviderHCloud(TestCase):
         provider.apply(plan)
 
         client.rrset_upsert.assert_called_once_with(
-            "unit.tests", "", "A", ["1.2.3.4", "2.2.3.4"], 300, labels=None
+            "unit.tests", "", "A", ["1.2.3.4", "2.2.3.4"], 300, labels=None, comment=None
         )
 
     def test_apply_delete_rrset(self):
@@ -228,7 +228,7 @@ class TestHetznerProviderHCloud(TestCase):
 
         # Verify rrset_upsert was called with new TTL=600
         client.rrset_upsert.assert_called_once_with(
-            "unit.tests", "", "A", ["1.2.3.4", "5.6.7.8"], 600, labels=None
+            "unit.tests", "", "A", ["1.2.3.4", "5.6.7.8"], 600, labels=None, comment=None
         )
 
     def test_txt_long_value_chunked(self):
@@ -509,7 +509,7 @@ class TestHetznerProviderHCloud(TestCase):
         provider.apply(plan)
 
         client.rrset_upsert.assert_called_once_with(
-            "unit.tests", "api", "A", ["1.2.3.4"], 300, labels={"env": "prod"}
+            "unit.tests", "api", "A", ["1.2.3.4"], 300, labels={"env": "prod"}, comment=None
         )
 
     def test_apply_create_without_labels_passes_none(self):
@@ -533,7 +533,7 @@ class TestHetznerProviderHCloud(TestCase):
         provider.apply(plan)
 
         client.rrset_upsert.assert_called_once_with(
-            "unit.tests", "api", "A", ["1.2.3.4"], 300, labels=None
+            "unit.tests", "api", "A", ["1.2.3.4"], 300, labels=None, comment=None
         )
 
     def test_extra_changes_detects_label_only_change(self):
@@ -604,4 +604,143 @@ class TestHetznerProviderHCloud(TestCase):
 
         plan = provider.plan(desired_zone)
         # No changes since labels match
+        self.assertIsNone(plan)
+
+    def test_populate_stores_comment_in_octodns_metadata(self):
+        """Test that per-record comments from hcloud API are stored in metadata."""
+        provider, client = self._provider_with_mock_client()
+
+        client.zone_get.return_value = {
+            "id": "unit.tests",
+            "name": "unit.tests",
+            "ttl": 3600,
+        }
+        client.zone_records_get.return_value = [
+            {
+                "id": "rr1:1.2.3.4",
+                "type": "A",
+                "name": "www",
+                "value": "1.2.3.4",
+                "ttl": 300,
+                "zone_id": "unit.tests",
+                "comment": "primary server",
+            }
+        ]
+
+        zone = Zone("unit.tests.", [])
+        provider.populate(zone)
+
+        record = list(zone.records)[0]
+        self.assertEqual("primary server", record.octodns.get("hetzner", {}).get("comment"))
+
+    def test_apply_create_with_comment_passes_to_rrset_upsert(self):
+        """Test that comment in octodns metadata is forwarded to rrset_upsert."""
+        provider, client = self._provider_with_mock_client()
+
+        client.zone_get.side_effect = IndexError("zone not found")
+        client.zone_create.return_value = {
+            "id": "unit.tests",
+            "name": "unit.tests",
+            "ttl": 3600,
+        }
+        client.zone_records_get.return_value = []
+
+        zone = Zone("unit.tests.", [])
+        record = Record.new(zone, "api", {"ttl": 300, "type": "A", "values": ["1.2.3.4"]})
+        record.octodns["hetzner"] = {"comment": "managed by octodns"}
+        zone.add_record(record)
+
+        plan = provider.plan(zone)
+        provider.apply(plan)
+
+        client.rrset_upsert.assert_called_once_with(
+            "unit.tests", "api", "A", ["1.2.3.4"], 300,
+            labels=None, comment="managed by octodns",
+        )
+
+    def test_apply_create_without_comment_passes_none(self):
+        """Test that records without comment metadata pass comment=None."""
+        provider, client = self._provider_with_mock_client()
+
+        client.zone_get.side_effect = IndexError("zone not found")
+        client.zone_create.return_value = {
+            "id": "unit.tests",
+            "name": "unit.tests",
+            "ttl": 3600,
+        }
+        client.zone_records_get.return_value = []
+
+        zone = Zone("unit.tests.", [])
+        zone.add_record(
+            Record.new(zone, "api", {"ttl": 300, "type": "A", "values": ["1.2.3.4"]})
+        )
+
+        plan = provider.plan(zone)
+        provider.apply(plan)
+
+        client.rrset_upsert.assert_called_once_with(
+            "unit.tests", "api", "A", ["1.2.3.4"], 300, labels=None, comment=None
+        )
+
+    def test_extra_changes_detects_comment_only_change(self):
+        """Test that _extra_changes generates an Update when comment changes."""
+        provider, client = self._provider_with_mock_client()
+
+        client.zone_get.return_value = {
+            "id": "unit.tests",
+            "name": "unit.tests",
+            "ttl": 3600,
+        }
+        client.zone_records_get.return_value = [
+            {
+                "id": "rr1:1.2.3.4",
+                "type": "A",
+                "name": "api",
+                "value": "1.2.3.4",
+                "ttl": 300,
+                "zone_id": "unit.tests",
+                "comment": "old comment",
+            }
+        ]
+
+        desired_zone = Zone("unit.tests.", [])
+        desired_record = Record.new(
+            desired_zone, "api", {"ttl": 300, "type": "A", "values": ["1.2.3.4"]}
+        )
+        desired_record.octodns["hetzner"] = {"comment": "new comment"}
+        desired_zone.add_record(desired_record)
+
+        plan = provider.plan(desired_zone)
+        self.assertIsNotNone(plan)
+        self.assertEqual(1, len(plan.changes))
+
+    def test_extra_changes_no_change_when_comment_same(self):
+        """Test that _extra_changes generates no Update when comment is identical."""
+        provider, client = self._provider_with_mock_client()
+
+        client.zone_get.return_value = {
+            "id": "unit.tests",
+            "name": "unit.tests",
+            "ttl": 3600,
+        }
+        client.zone_records_get.return_value = [
+            {
+                "id": "rr1:1.2.3.4",
+                "type": "A",
+                "name": "api",
+                "value": "1.2.3.4",
+                "ttl": 300,
+                "zone_id": "unit.tests",
+                "comment": "same comment",
+            }
+        ]
+
+        desired_zone = Zone("unit.tests.", [])
+        desired_record = Record.new(
+            desired_zone, "api", {"ttl": 300, "type": "A", "values": ["1.2.3.4"]}
+        )
+        desired_record.octodns["hetzner"] = {"comment": "same comment"}
+        desired_zone.add_record(desired_record)
+
+        plan = provider.plan(desired_zone)
         self.assertIsNone(plan)

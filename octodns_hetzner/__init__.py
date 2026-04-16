@@ -335,9 +335,15 @@ class HetznerProvider(BaseProvider):
                     source=self,
                     lenient=lenient,
                 )
+                hetzner_meta = {}
                 labels = records[0].get('labels')
                 if labels:
-                    record.octodns['hetzner'] = {'labels': labels}
+                    hetzner_meta['labels'] = labels
+                comment = records[0].get('comment')
+                if comment:
+                    hetzner_meta['comment'] = comment
+                if hetzner_meta:
+                    record.octodns['hetzner'] = hetzner_meta
                 zone.add_record(record, lenient=lenient)
 
         exists = zone.name in self._zone_records
@@ -464,12 +470,22 @@ class HetznerProvider(BaseProvider):
         'Returns record labels dict, or empty dict if not set'
         return record.octodns.get('hetzner', {}).get('labels', {})
 
+    def _record_comment(self, record):
+        'Returns record comment string, or empty string if not set'
+        return record.octodns.get('hetzner', {}).get('comment', '')
+
     def _apply_Create(self, zone_id, change):
         """Delegate create operation to strategy."""
         params_for = getattr(self, f"_params_for_{change.new._type}")
         labels = self._record_labels(change.new)
+        comment = self._record_comment(change.new)
         self._strategy.apply_create(
-            self._client, zone_id, change, params_for, labels=labels or None
+            self._client,
+            zone_id,
+            change,
+            params_for,
+            labels=labels or None,
+            comment=comment or None,
         )
 
     def _apply_Update(self, zone_id, change):
@@ -477,6 +493,7 @@ class HetznerProvider(BaseProvider):
         params_for = getattr(self, f"_params_for_{change.new._type}")
         zone = change.existing.zone
         labels = self._record_labels(change.new)
+        comment = self._record_comment(change.new)
         self._strategy.apply_update(
             self._client,
             zone_id,
@@ -484,6 +501,7 @@ class HetznerProvider(BaseProvider):
             params_for,
             self.zone_records(zone),
             labels=labels or None,
+            comment=comment or None,
         )
 
     def _apply_Delete(self, zone_id, change):
@@ -503,6 +521,11 @@ class HetznerProvider(BaseProvider):
             if existing_record is None or existing_record in changed:
                 continue
             if self._record_labels(existing_record) != self._record_labels(
+                desired_record
+            ):
+                extra_changes.append(Update(existing_record, desired_record))
+
+            if self._record_comment(existing_record) != self._record_comment(
                 desired_record
             ):
                 extra_changes.append(Update(existing_record, desired_record))

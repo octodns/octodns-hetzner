@@ -77,6 +77,7 @@ class DNSAPIStrategy:
         change,
         params_generator: Callable,
         labels=None,
+        comment=None,
     ) -> None:
         """Create records one by one."""
         new = change.new
@@ -97,6 +98,7 @@ class DNSAPIStrategy:
         params_generator: Callable,
         zone_records: List = None,
         labels=None,
+        comment=None,
     ) -> None:
         """Update via delete-then-create strategy."""
         # It's simpler to delete-then-recreate than to update
@@ -134,13 +136,17 @@ class HCloudStrategy:
         change,
         params_generator: Callable,
         labels=None,
+        comment=None,
     ) -> None:
         """Create/upsert entire RRSet."""
         new = change.new
         # Collect all values for the RRSet
         values = [p['value'] for p in params_generator(new)]
-        # Single RRSet upsert with all values and optional labels
-        client.rrset_upsert(zone_id, new.name, new._type, values, new.ttl, labels=labels)
+        # Single RRSet upsert with all values, optional labels and comment
+        client.rrset_upsert(
+            zone_id, new.name, new._type, values, new.ttl,
+            labels=labels, comment=comment,
+        )
 
     def apply_update(
         self,
@@ -150,11 +156,14 @@ class HCloudStrategy:
         params_generator: Callable,
         zone_records: List = None,
         labels=None,
+        comment=None,
     ) -> None:
         """Update via RRSet replacement (idempotent upsert)."""
         # RRSet upsert is idempotent - just upsert the new values
         # zone_records not needed for RRSet-based updates
-        self.apply_create(client, zone_id, change, params_generator, labels=labels)
+        self.apply_create(
+            client, zone_id, change, params_generator, labels=labels, comment=comment
+        )
 
     def apply_delete(
         self, client, zone_id: str, change, zone_records: List

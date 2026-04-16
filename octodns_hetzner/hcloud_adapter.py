@@ -93,6 +93,7 @@ class HCloudZonesClient:
 
         Output keys: 'id', 'type', 'name', 'value', 'ttl', 'zone_id'.
         Labels (key/value pairs) are included as 'labels' when present on the RRSet.
+        Per-record comments are included as 'comment' when present on a ZoneRecord.
         """
         zone = self._get_zone_by_id_or_name(zone_id)
         rrsets = self._get_rrsets(zone)
@@ -111,6 +112,7 @@ class HCloudZonesClient:
             labels = getattr(rrset, 'labels', None) or {}
             for rec in getattr(rrset, 'records', []) or []:
                 value = getattr(rec, 'value', None)
+                comment = getattr(rec, 'comment', None)
                 # Construct a synthetic id from rrset + value to support deletes
                 rid = f'{getattr(rrset, "id", "")}:{value}'
                 record: Dict = {
@@ -123,6 +125,8 @@ class HCloudZonesClient:
                 }
                 if labels:
                     record['labels'] = labels
+                if comment:
+                    record['comment'] = comment
                 records.append(record)
         return records
 
@@ -136,12 +140,15 @@ class HCloudZonesClient:
         value: str,
         ttl: int = None,
         labels: Dict = None,
+        comment: str = None,
     ):
         """Compatibility shim: upsert a single value into the RRSet.
 
         Provider may call this in legacy flows; prefer rrset_upsert.
         """
-        return self.rrset_upsert(zone_id, name, _type, [value], ttl, labels=labels)
+        return self.rrset_upsert(
+            zone_id, name, _type, [value], ttl, labels=labels, comment=comment
+        )
 
     def zone_record_delete(self, zone_id: str, record_id: str):
         """Compatibility shim: record_id is synthetic '<rrset_id>:<value>'.
@@ -232,12 +239,14 @@ class HCloudZonesClient:
         values: List[str],
         ttl: int,
         labels: Dict = None,
+        comment: str = None,
     ):
         """Replace or create RRSet for (name, type) with provided values.
 
         This is the primary mutation primitive used by the provider.
         Labels are optional key/value pairs stored on the RRSet. Pass a non-empty
         dict to set labels; omit or pass None to leave existing labels untouched.
+        Comment is an optional string stored on each ZoneRecord in the RRSet.
         """
         zone = self._get_zone_by_id_or_name(zone_id)
         # Try to locate existing rrset
@@ -254,13 +263,19 @@ class HCloudZonesClient:
                 break
 
         # Build records list shape expected by client: [ZoneRecord(value=v), ...]
-        # TXT records need to be quoted for the hcloud API
+        # TXT records need to be quoted for the hcloud API.
+        # Comment is stored on each individual ZoneRecord.
         if _type == 'TXT':
             recs = [
-                self._ZoneRecord(value=self._quote_txt_value(v)) for v in values
+                self._ZoneRecord(
+                    value=self._quote_txt_value(v), comment=comment or None
+                )
+                for v in values
             ]
         else:
-            recs = [self._ZoneRecord(value=v) for v in values]
+            recs = [
+                self._ZoneRecord(value=v, comment=comment or None) for v in values
+            ]
 
         if target is None:
             # Create new rrset using zone.create_rrset - TTL is accepted here

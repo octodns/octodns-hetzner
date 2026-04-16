@@ -11,8 +11,9 @@ from octodns_hetzner.hcloud_adapter import HCloudZonesClient
 
 
 class FakeRecord:
-    def __init__(self, value):
+    def __init__(self, value, comment=None):
         self.value = value
+        self.comment = comment
 
 
 class FakeRRSet:
@@ -61,10 +62,15 @@ class FakeZone:
 
     def create_rrset(self, name, type, records, ttl, labels=None):
         # Handle both dict and object formats (for ZoneRecord compatibility)
-        values = [
-            r["value"] if isinstance(r, dict) else r.value for r in records
+        fake_records = [
+            FakeRecord(
+                r["value"] if isinstance(r, dict) else r.value,
+                comment=r.get("comment") if isinstance(r, dict) else getattr(r, "comment", None),
+            )
+            for r in records
         ]
-        rr = FakeRRSet("new", name or "", type, ttl, values, labels=labels)
+        rr = FakeRRSet("new", name or "", type, ttl, [], labels=labels)
+        rr.records = fake_records
         self.rrsets.append(rr)
         self.created_rrset = {
             "name": name,
@@ -87,7 +93,10 @@ class FakeZone:
         """
         # Handle both dict and object formats (for ZoneRecord compatibility)
         rrset.records = [
-            FakeRecord(v["value"] if isinstance(v, dict) else v.value)
+            FakeRecord(
+                v["value"] if isinstance(v, dict) else v.value,
+                comment=v.get("comment") if isinstance(v, dict) else getattr(v, "comment", None),
+            )
             for v in records
         ]
         return rrset
@@ -174,11 +183,15 @@ class FakeZones:
 
     def create_rrset(self, zone, name, type, records, ttl, labels=None):
         """Create RRSet (mimics hcloud API with zone parameter)."""
-        # Handle both dict and object formats (for ZoneRecord compatibility)
-        values = [
-            r["value"] if isinstance(r, dict) else r.value for r in records
+        fake_records = [
+            FakeRecord(
+                r["value"] if isinstance(r, dict) else r.value,
+                comment=r.get("comment") if isinstance(r, dict) else getattr(r, "comment", None),
+            )
+            for r in records
         ]
-        rr = FakeRRSet("new2", name or "", type, ttl, values, labels=labels)
+        rr = FakeRRSet("new2", name or "", type, ttl, [], labels=labels)
+        rr.records = fake_records
         zone.rrsets.append(rr)
         return rr
 
@@ -749,3 +762,55 @@ class TestHCloudAdapter(TestCase):
         self.client.rrset_upsert("z1", "", "A", ["1.2.3.4", "2.2.2.2"], 300)
         # Labels should remain unchanged
         self.assertEqual({"env": "prod"}, a_rr.labels)
+
+    def test_zone_records_get_includes_comment(self):
+        """Test that comments from ZoneRecords are included in flattened records."""
+        z = self.client._zones.get_by_id("z1")
+        # Replace A rrset with one that has a comment
+        z.rrsets = [
+            r for r in z.rrsets if not (r.type == "A" and r.name in ("", "@"))
+        ]
+        rr = FakeRRSet("rr_commented", "", "A", 300, [])
+        rr.records = [FakeRecord("1.2.3.4", comment="managed by octodns")]
+        z.rrsets.append(rr)
+
+        recs = self.client.zone_records_get("z1")
+        a_recs = [r for r in recs if r.get("type") == "A"]
+        self.assertEqual(1, len(a_recs))
+        self.assertEqual("managed by octodns", a_recs[0]["comment"])
+
+    def test_zone_records_get_no_comment_omits_key(self):
+        """Test that records without comments don't include the 'comment' key."""
+        recs = self.client.zone_records_get("z1")
+        a_recs = [r for r in recs if r.get("type") == "A"]
+        self.assertTrue(len(a_recs) > 0)
+        for r in a_recs:
+            self.assertNotIn("comment", r)
+
+    def test_rrset_upsert_create_with_comment(self):
+        """Test that comment is stored on ZoneRecord objects when creating."""
+        self.client.rrset_upsert(
+            "z1", "api", "A", ["10.0.0.1"], 300, comment="prod api"
+        )
+        z = self.client._zones.get_by_id("z1")
+        new_rr = [r for r in z.rrsets if r.type == "A" and r.name == "api"][0]
+        self.assertEqual(1, len(new_rr.records))
+        self.assertEqual("prod api", new_rr.records[0].comment)
+
+    def test_rrset_upsert_update_with_comment(self):
+        """Test that comment is stored on ZoneRecord objects when updating."""
+        self.client.rrset_upsert(
+            "z1", "", "A", ["1.2.3.4", "9.9.9.9"], 300, comment="updated"
+        )
+        z = self.client._zones.get_by_id("z1")
+        a_rr = [r for r in z.rrsets if r.type == "A" and r.name in ("", "@")][0]
+        for rec in a_rr.records:
+            self.assertEqual("updated", rec.comment)
+
+    def test_rrset_upsert_without_comment_stores_none(self):
+        """Test that omitting comment stores None on ZoneRecord objects."""
+        self.client.rrset_upsert("z1", "", "A", ["1.2.3.4"], 300)
+        z = self.client._zones.get_by_id("z1")
+        a_rr = [r for r in z.rrsets if r.type == "A" and r.name in ("", "@")][0]
+        for rec in a_rr.records:
+            self.assertIsNone(rec.comment)
