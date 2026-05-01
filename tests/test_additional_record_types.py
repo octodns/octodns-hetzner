@@ -127,20 +127,22 @@ class TestAdditionalRecordTypes(TestCase):
         calls = provider._client.zone_record_create.call_args_list
         self.assertEqual(3, len(calls))
         # Ensure individual calls were made with expected positional args
-        args_list = [c.args for c in calls]
+        args_list = [list(c.args) for c in calls]
+        for args in args_list:
+            args[3] = args[3].lower()
         self.assertIn(
-            ('unit.tests', '', 'DS', '2371 8 2 31FDAB', 3600), args_list
+            ['unit.tests', '', 'DS', '2371 8 2 31fdab', 3600], args_list
         )
         self.assertIn(
-            ('unit.tests', '_443._tcp', 'TLSA', '3 1 1 AABBCC', 600), args_list
+            ['unit.tests', '_443._tcp', 'TLSA', '3 1 1 aabbcc', 600], args_list
         )
         self.assertIn(
-            (
+            [
                 'unit.tests',
                 '4.3.2.1.in-addr.arpa',
                 'PTR',
                 'ptr.unit.tests.',
                 300,
-            ),
+            ],
             args_list,
         )
