@@ -19,7 +19,9 @@ from octodns_hetzner import HetznerClientNotFound, HetznerProvider
 
 class TestHetznerProvider(TestCase):
     expected = Zone('unit.tests.', [])
-    source = YamlProvider('test', join(dirname(__file__), 'config'))
+    source = YamlProvider(
+        'test', join(dirname(__file__), 'config'), escaped_semicolons=False
+    )
     source.populate(expected)
 
     def test_populate(self):
