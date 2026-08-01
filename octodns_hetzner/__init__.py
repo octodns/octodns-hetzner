@@ -6,11 +6,8 @@ import logging
 from collections import defaultdict
 
 from octodns.provider.base import BaseProvider
-from octodns.record import Record
+from octodns.record import RdataParseError, Record, Rrset, TxtValue
 from octodns.record.caa import CaaValue
-from octodns.record.ds import DsValue
-from octodns.record.rr import RrParseError
-from octodns.record.tlsa import TlsaValue
 
 # Import exceptions for backward compatibility
 from .exceptions import (
@@ -158,128 +155,33 @@ class HetznerProvider(BaseProvider):
         default_ttl = self.zone_metadata(zone_id=record["zone_id"])["ttl"]
         return record["ttl"] if "ttl" in record else default_ttl
 
-    def _data_for_multiple(self, _type, records):
-        values = [record["value"].replace(";", "\\;") for record in records]
-        return {
-            "ttl": self._record_ttl(records[0]),
-            "type": _type,
-            "values": values,
-        }
+    def _rdata_for(self, _type, value):
+        """Normalize a raw Hetzner API value into RDATA presentation text.
 
-    _data_for_A = _data_for_multiple
-    _data_for_AAAA = _data_for_multiple
-
-    def _data_for_CAA(self, _type, records):
-        values = []
-        for record in records:
-            raw = record["value"]
+        Hetzner returns values with the record-name-shaped fields (targets,
+        exchanges) missing their trailing dot, so that gets patched in here,
+        before handing the string to octoDNS's from_rdata_text() parsers.
+        """
+        if _type in ("CNAME", "NS", "PTR"):
+            return self._append_dot(value)
+        elif _type in ("MX", "SRV"):
+            # only the trailing field (target/exchange) is a name
+            head, _, target = value.strip().rpartition(" ")
+            return f"{head} {self._append_dot(target)}"
+        elif _type == "CAA":
             try:
-                parsed = CaaValue.parse_rdata_text(raw)
-                values.append(parsed)
-            except RrParseError as e:
-                # Fallback best-effort for unexpected formats
+                CaaValue.from_rdata_text(value)
+            except RdataParseError as e:
+                # Fallback best-effort for unexpected formats, matches the
+                # previous behavior of _data_for_CAA
                 self.log.warning(
-                    "_data_for_CAA: failed to parse CAA record %r: %s, "
-                    "using fallback values (flags=0, tag=issue)",
-                    raw,
+                    "_rdata_for: failed to parse CAA record %r: %s, "
+                    "using fallback value (flags=0, tag=issue)",
+                    value,
                     e,
                 )
-                values.append({"flags": 0, "tag": "issue", "value": raw})
-        return {
-            "ttl": self._record_ttl(records[0]),
-            "type": _type,
-            "values": values,
-        }
-
-    def _data_for_CNAME(self, _type, records):
-        record = records[0]
-        return {
-            "ttl": self._record_ttl(record),
-            "type": _type,
-            "value": self._append_dot(record["value"]),
-        }
-
-    def _data_for_PTR(self, _type, records):
-        record = records[0]
-        return {
-            "ttl": self._record_ttl(record),
-            "type": _type,
-            "value": self._append_dot(record["value"]),
-        }
-
-    def _data_for_MX(self, _type, records):
-        values = []
-        for record in records:
-            value_stripped_split = record["value"].strip().split(" ")
-            preference = value_stripped_split[0]
-            exchange = value_stripped_split[-1]
-            values.append(
-                {
-                    "preference": int(preference),
-                    "exchange": self._append_dot(exchange),
-                }
-            )
-        return {
-            "ttl": self._record_ttl(records[0]),
-            "type": _type,
-            "values": values,
-        }
-
-    def _data_for_NS(self, _type, records):
-        values = []
-        for record in records:
-            values.append(self._append_dot(record["value"]))
-        return {
-            "ttl": self._record_ttl(records[0]),
-            "type": _type,
-            "values": values,
-        }
-
-    def _data_for_DS(self, _type, records):
-        values = []
-        for record in records:
-            parsed = DsValue.parse_rdata_text(record["value"])
-            values.append(parsed)
-        return {
-            "ttl": self._record_ttl(records[0]),
-            "type": _type,
-            "values": values,
-        }
-
-    def _data_for_SRV(self, _type, records):
-        values = []
-        for record in records:
-            value_stripped = record["value"].strip()
-            priority = value_stripped.split(" ")[0]
-            weight = value_stripped[len(priority) :].strip().split(" ")[0]
-            target = value_stripped.split(" ")[-1]
-            port = value_stripped[: -len(target)].strip().split(" ")[-1]
-            values.append(
-                {
-                    "port": int(port),
-                    "priority": int(priority),
-                    "target": self._append_dot(target),
-                    "weight": int(weight),
-                }
-            )
-        return {
-            "ttl": self._record_ttl(records[0]),
-            "type": _type,
-            "values": values,
-        }
-
-    _data_for_TXT = _data_for_multiple
-
-    def _data_for_TLSA(self, _type, records):
-        values = []
-        for record in records:
-            parsed = TlsaValue.parse_rdata_text(record["value"])
-            values.append(parsed)
-        return {
-            "ttl": self._record_ttl(records[0]),
-            "type": _type,
-            "values": values,
-        }
+                return f'0 issue "{value}"'
+        return value
 
     def list_zones(self):
         self.log.debug("list_zones:")
@@ -324,17 +226,57 @@ class HetznerProvider(BaseProvider):
             values[record["name"]][record["type"]].append(record)
 
         before = len(zone.records)
+        rrsets = []
         for name, types in values.items():
+            fqdn = zone.name if name == "@" else f"{name}.{zone.name}"
             for _type, records in types.items():
-                data_for = getattr(self, f"_data_for_{_type}")
-                record = Record.new(
-                    zone,
-                    name,
-                    data_for(_type, records),
-                    source=self,
-                    lenient=lenient,
-                )
-                zone.add_record(record, lenient=lenient)
+                ttl = self._record_ttl(records[0])
+                if _type == "TXT":
+                    # Hetzner returns TXT as raw provider text, not RDATA
+                    # presentation format, so these can't go through
+                    # Record.from_rrsets() -> TxtValue.from_rdata_text().
+                    # dnspython treats an unquoted ';' as a master-file
+                    # comment, which silently truncates values like
+                    # 'v=DKIM1;k=rsa;s=email;...' down to 'v=DKIM1', and
+                    # raises RdataParseError on any unquoted value over 255
+                    # chars.
+                    #
+                    # The quoting we get back is inconsistent (see
+                    # ansible-collections/community.dns#48): values over 255
+                    # bytes come back as multiple quoted chunks, while
+                    # shorter values without spaces keep whatever quoting was
+                    # originally written. normalize_raw_text() handles both
+                    # -- TxtValue.process() strips the outer quotes and joins
+                    # on '" "'.
+                    data = {
+                        "ttl": ttl,
+                        "type": _type,
+                        "values": [
+                            TxtValue.normalize_raw_text(record["value"])
+                            for record in records
+                        ],
+                    }
+                    new_record = Record.new(
+                        zone, name, data, source=self, lenient=lenient
+                    )
+                    zone.add_record(new_record, lenient=lenient)
+                else:
+                    rrsets.append(
+                        Rrset(
+                            fqdn,
+                            _type,
+                            ttl,
+                            [
+                                self._rdata_for(_type, record["value"])
+                                for record in records
+                            ],
+                        )
+                    )
+
+        for record in Record.from_rrsets(
+            zone, rrsets, lenient=lenient, source=self
+        ):
+            zone.add_record(record, lenient=lenient)
 
         exists = zone.name in self._zone_records
         self.log.info(
@@ -344,129 +286,47 @@ class HetznerProvider(BaseProvider):
         )
         return exists
 
-    def _params_for_multiple(self, record):
-        for value in record.values:
-            yield {
-                "value": value.replace("\\;", ";"),
-                "name": record.name,
-                "ttl": record.ttl,
-                "type": record._type,
-            }
-
-    _params_for_A = _params_for_multiple
-    _params_for_AAAA = _params_for_multiple
-
-    def _params_for_CAA(self, record):
-        for value in record.values:
-            data = f'{value.flags} {value.tag} "{value.value}"'
-            yield {
-                "value": data,
-                "name": record.name,
-                "ttl": record.ttl,
-                "type": record._type,
-            }
-
-    def _params_for_single(self, record):
-        yield {
-            "value": record.value,
-            "name": record.name,
-            "ttl": record.ttl,
-            "type": record._type,
-        }
-
-    _params_for_CNAME = _params_for_single
-    _params_for_PTR = _params_for_single
-
-    def _params_for_MX(self, record):
-        for value in record.values:
-            data = f"{value.preference} {value.exchange}"
-            yield {
-                "value": data,
-                "name": record.name,
-                "ttl": record.ttl,
-                "type": record._type,
-            }
-
-    _params_for_NS = _params_for_multiple
-
-    def _params_for_DS(self, record):
-        for value in record.values:
-            data = f"{value.key_tag} {value.algorithm} {value.digest_type} {value.digest}"
-            yield {
-                "value": data,
-                "name": record.name,
-                "ttl": record.ttl,
-                "type": record._type,
-            }
-
-    def _params_for_SRV(self, record):
-        for value in record.values:
-            data = (
-                f"{value.priority} {value.weight} {value.port} {value.target}"
-            )
-            yield {
-                "value": data,
-                "name": record.name,
-                "ttl": record.ttl,
-                "type": record._type,
-            }
-
-    def _params_for_TXT(self, record):
-        """Generate params for TXT records.
-
-        For hcloud backend: Uses record.chunked_values which automatically
-        splits values >255 chars into RFC-compliant chunks with proper quoting.
-
-        For dnsapi backend: Uses record.values (raw values) as the API
-        handles formatting internally.
-
-        This ensures long TXT values (e.g., DKIM keys) work correctly
-        with the hcloud backend while maintaining compatibility with dnsapi.
-        """
-        if self._backend == "hcloud":
-            # Use chunked_values for proper RFC-compliant chunking
-            # Returns pre-quoted format: '"chunk1" "chunk2"'
-            for value in record.chunked_values:
-                yield {
-                    "value": value.replace("\\;", ";"),
-                    "name": record.name,
-                    "ttl": record.ttl,
-                    "type": record._type,
-                }
+    def _params_for(self, record):
+        rrset = record.to_rrset()
+        if record._type == "TXT" and self._backend != "hcloud":
+            # dnsapi wants raw text rather than the presentation-format
+            # RDATA to_rrset() produces. It would accept quoted values, but
+            # writing them is a bad trade: Hetzner's re-quoting is
+            # inconsistent enough to cause idempotency churn (see
+            # ansible-collections/community.dns#48, which settled on
+            # unquoted-by-default for Hetzner over exactly this),
+            # to_rdata_text() escapes '"' as '\"' which TxtValue.process()
+            # never unescapes on the way back in, and Hetzner already chunks
+            # long raw values RFC-conformantly on its own side.
+            rdatas = [value.to_raw_text() for value in record.values]
         else:
-            # dnsapi backend: use raw values
-            for value in record.values:
-                yield {
-                    "value": value.replace("\\;", ";"),
-                    "name": record.name,
-                    "ttl": record.ttl,
-                    "type": record._type,
-                }
-
-    def _params_for_TLSA(self, record):
-        for value in record.values:
-            data = (
-                f"{value.certificate_usage} {value.selector} {value.matching_type} "
-                f"{value.certificate_association_data}"
-            )
+            # hcloud is RRSet-native and wants quoted, chunked presentation
+            # text -- exactly what to_rrset() emits, matching the
+            # record.chunked_values output this replaces.
+            rdatas = rrset.rdatas
+        for rdata in rdatas:
             yield {
-                "value": data,
+                "value": rdata,
                 "name": record.name,
-                "ttl": record.ttl,
-                "type": record._type,
+                "ttl": rrset.ttl,
+                "type": rrset._type,
             }
 
     def _apply_Create(self, zone_id, change):
         """Delegate create operation to strategy."""
-        params_for = getattr(self, f"_params_for_{change.new._type}")
-        self._strategy.apply_create(self._client, zone_id, change, params_for)
+        self._strategy.apply_create(
+            self._client, zone_id, change, self._params_for
+        )
 
     def _apply_Update(self, zone_id, change):
         """Delegate update operation to strategy."""
-        params_for = getattr(self, f"_params_for_{change.new._type}")
         zone = change.existing.zone
         self._strategy.apply_update(
-            self._client, zone_id, change, params_for, self.zone_records(zone)
+            self._client,
+            zone_id,
+            change,
+            self._params_for,
+            self.zone_records(zone),
         )
 
     def _apply_Delete(self, zone_id, change):

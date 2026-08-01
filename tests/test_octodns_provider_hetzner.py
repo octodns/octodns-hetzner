@@ -469,6 +469,70 @@ class TestHetznerProvider(TestCase):
             any_order=True,
         )
 
+    def test_populate_txt_raw_text(self):
+        # Hetzner's dnsapi returns TXT as raw provider text, not RDATA
+        # presentation format. A naive migration to Record.from_rrsets()
+        # would run these through TxtValue.from_rdata_text(), which treats
+        # an unquoted ';' as a master-file comment (silently truncating
+        # values) and raises on unquoted values over 255 characters.
+        # normalize_raw_text() must be used instead, preserving the full
+        # value and the pre-existing ';' -> '\;' escaping.
+        provider = HetznerProvider('test', 'token')
+        provider._client.zone_get = Mock(
+            return_value={'id': 'unit.tests', 'name': 'unit.tests', 'ttl': 3600}
+        )
+        long_value = 'a' * 300
+        provider._client.zone_records_get = Mock(
+            return_value=[
+                {
+                    'type': 'TXT',
+                    'id': 't1',
+                    'created': '',
+                    'modified': '',
+                    'zone_id': 'unit.tests',
+                    'name': 'txt',
+                    'value': long_value,
+                    'ttl': 600,
+                },
+                {
+                    'type': 'TXT',
+                    'id': 't2',
+                    'created': '',
+                    'modified': '',
+                    'zone_id': 'unit.tests',
+                    'name': 'txt',
+                    'value': 'v=DKIM1;k=rsa',
+                    'ttl': 600,
+                },
+            ]
+        )
+
+        zone = Zone('unit.tests.', [])
+        provider.populate(zone)
+
+        (record,) = [r for r in zone.records if r._type == 'TXT']
+        self.assertEqual(
+            sorted([long_value, 'v=DKIM1\\;k=rsa']), sorted(record.values)
+        )
+
+    def test_params_for_txt_backend_specific(self):
+        # dnsapi wants raw, unquoted text (and Hetzner's own re-quoting of
+        # that text is inconsistent, see
+        # ansible-collections/community.dns#48), while hcloud is RRSet-based
+        # and wants quoted, chunked RDATA presentation text. _params_for()
+        # must keep producing each backend's expected format.
+        dnsapi_provider = HetznerProvider('test', 'token')
+        zone = Zone('unit.tests.', [])
+        record = Record.new(
+            zone, 'txt', {'ttl': 600, 'type': 'TXT', 'value': 'v=DKIM1\\;k=rsa'}
+        )
+        (params,) = list(dnsapi_provider._params_for(record))
+        self.assertEqual('v=DKIM1;k=rsa', params['value'])
+
+        hcloud_provider = HetznerProvider('test', 'token', backend='hcloud')
+        (params,) = list(hcloud_provider._params_for(record))
+        self.assertEqual('"v=DKIM1;k=rsa"', params['value'])
+
     def test_list_zones(self):
         provider = HetznerProvider('test', 'token')
 

@@ -64,6 +64,49 @@ class TestAdditionalRecordTypes(TestCase):
         self.assertIn('TLSA', types)
         self.assertIn('PTR', types)
 
+    def test_populate_ptr_multivalue(self):
+        # Prior to the RDATA API migration, _data_for_PTR only looked at
+        # records[0], so a PTR name with more than one value silently lost
+        # everything past the first. Record.from_rrsets() groups all values
+        # for a name/type before handing them to PtrRecord (a ValuesMixin),
+        # so this is now a genuine multi-value record.
+        provider = HetznerProvider('test', 'token')
+        provider._client.zone_get = Mock(
+            return_value={'id': 'unit.tests', 'name': 'unit.tests', 'ttl': 3600}
+        )
+        provider._client.zone_records_get = Mock(
+            return_value=[
+                {
+                    'type': 'PTR',
+                    'id': 'p1',
+                    'created': '',
+                    'modified': '',
+                    'zone_id': 'unit.tests',
+                    'name': 'ptr',
+                    'value': 'one.unit.tests.',
+                    'ttl': 300,
+                },
+                {
+                    'type': 'PTR',
+                    'id': 'p2',
+                    'created': '',
+                    'modified': '',
+                    'zone_id': 'unit.tests',
+                    'name': 'ptr',
+                    'value': 'two.unit.tests.',
+                    'ttl': 300,
+                },
+            ]
+        )
+
+        zone = Zone('unit.tests.', [])
+        provider.populate(zone)
+
+        (record,) = [r for r in zone.records if r._type == 'PTR']
+        self.assertEqual(
+            ['one.unit.tests.', 'two.unit.tests.'], sorted(record.values)
+        )
+
     def test_apply_ds_tlsa_ptr(self):
         provider = HetznerProvider('test', 'token', strict_supports=False)
         provider._client.zone_get = Mock(
