@@ -6,15 +6,8 @@ import logging
 from collections import defaultdict
 
 from octodns.provider.base import BaseProvider
-from octodns.record import RdataParseError, Record, Rrset
+from octodns.record import RdataParseError, Record, Rrset, TxtValue
 from octodns.record.caa import CaaValue
-
-# There is no public export for the TXT/SPF value type; this is the same
-# private class octoDNS core's own tinydns source uses for the equivalent
-# raw-text handling (octodns/source/tinydns.py). Flagged upstream on
-# octodns/octodns#1452 as a gap: providers that receive raw (non-RDATA)
-# TXT/SPF text have no public class to call normalize_raw_text() on.
-from octodns.record.chunked import _ChunkedValue as TxtValue
 
 # Import exceptions for backward compatibility
 from .exceptions import (
