@@ -298,11 +298,7 @@ class HetznerProvider(BaseProvider):
             # to_rdata_text() escapes '"' as '\"' which TxtValue.process()
             # never unescapes on the way back in, and Hetzner already chunks
             # long raw values RFC-conformantly on its own side.
-            #
-            # octoDNS core has normalize_raw_text() for presentation ->
-            # internal on read but no inverse for internal -> raw, so
-            # unescape by hand.
-            rdatas = [value.replace("\\;", ";") for value in record.values]
+            rdatas = [value.to_raw_text() for value in record.values]
         else:
             # hcloud is RRSet-native and wants quoted, chunked presentation
             # text -- exactly what to_rrset() emits, matching the
