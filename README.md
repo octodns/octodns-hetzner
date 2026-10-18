@@ -120,6 +120,33 @@ HetznerProvider supports full root NS record management.
 
 HetznerProvider does not support dynamic records.
 
+### Debugging
+
+The `dnsapi` backend can log every API request, any redirects it followed and
+the raw response (status, content type and body) at the custom `TRACE` level
+(5), which is below `DEBUG` so `--debug` alone does not enable it. Pass a
+logging config to `octodns-sync --logging-config trace.yaml`, e.g.
+
+```yaml
+version: 1
+formatters:
+  default:
+    format: '%(asctime)s %(levelname)-7s %(name)s %(message)s'
+handlers:
+  stderr:
+    class: logging.StreamHandler
+    formatter: default
+root:
+  level: DEBUG
+  handlers: [stderr]
+loggers:
+  octodns_hetzner:
+    level: 5  # TRACE
+```
+
+The API token is not logged, but request and response bodies contain your
+zone data.
+
 ### Development
 
 See the [/script/](/script/) directory for some tools to help with the development process. They generally follow the [Script to rule them all](https://github.com/github/scripts-to-rule-them-all) pattern. Most useful is `./script/bootstrap` which will create a venv and install both the runtime and development related requirements. It will also hook up a pre-commit hook that covers most of what's run by CI.

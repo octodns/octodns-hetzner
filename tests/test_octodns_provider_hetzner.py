@@ -530,6 +530,41 @@ class TestHetznerProvider(TestCase):
             self.assertEqual('test2.com', domains[1]['name'])
             self.assertEqual('test3.com', domains[2]['name'])
 
+    def test_client_trace_logging(self):
+        from octodns_hetzner.dnsapi_client import TRACE
+
+        provider = HetznerProvider('test', 'token')
+        client = provider._client
+        base = client.BASE_URL
+
+        with requests_mock() as mock:
+            mock.get(
+                f'{base}/zones',
+                status_code=301,
+                headers={'Location': 'https://console.example/'},
+            )
+            mock.get(
+                'https://console.example/',
+                text='<html></html>',
+                headers={'Content-Type': 'text/html'},
+            )
+
+            with self.assertLogs('octodns_hetzner.dnsapi_client', TRACE) as cm:
+                client._do('GET', '/zones', {'name': 'unit.tests'})
+
+        self.assertEqual(3, len(cm.records))
+        self.assertTrue(all(r.levelname == 'TRACE' for r in cm.records))
+        request, redirect, response = cm.output
+        self.assertIn(f'url={base}/zones', request)
+        self.assertIn("params={'name': 'unit.tests'}", request)
+        self.assertIn('status=301', redirect)
+        self.assertIn('location=https://console.example/', redirect)
+        self.assertIn('status=200', response)
+        self.assertIn('content-type=text/html', response)
+        self.assertIn('body=<html></html>', response)
+        # The API token must never end up in the logs
+        self.assertNotIn('token', ''.join(cm.output))
+
     def test_hetzner_client_backward_compat_import(self):
         """Test backward-compatible HetznerClient import."""
         # Test successful import (normal case)

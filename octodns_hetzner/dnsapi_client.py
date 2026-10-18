@@ -2,12 +2,20 @@
 #
 #
 
+import logging
+
 from requests import Session
 
 from octodns import __VERSION__ as octodns_version
 
 from . import __version__ as package_version
 from .exceptions import HetznerClientNotFound, HetznerClientUnauthorized
+
+# Below DEBUG so that `--debug` does not dump full API traffic. Enable it with
+# e.g. `octodns-sync --logging-config ...` setting the `octodns_hetzner`
+# logger's level to TRACE (or 5).
+TRACE = 5
+logging.addLevelName(TRACE, 'TRACE')
 
 
 class HetznerClient(object):
@@ -22,10 +30,38 @@ class HetznerClient(object):
             }
         )
         self._session = session
+        self._log = logging.getLogger(__name__)
 
     def _do(self, method, path, params=None, data=None):
         url = f'{self.BASE_URL}{path}'
+        trace = self._log.isEnabledFor(TRACE)
+        if trace:
+            self._log.log(
+                TRACE,
+                '_do: request method=%s, url=%s, params=%s, data=%s',
+                method,
+                url,
+                params,
+                data,
+            )
         response = self._session.request(method, url, params=params, json=data)
+        if trace:
+            for hop in response.history:
+                self._log.log(
+                    TRACE,
+                    '_do: redirect status=%s, url=%s, location=%s',
+                    hop.status_code,
+                    hop.url,
+                    hop.headers.get('Location'),
+                )
+            self._log.log(
+                TRACE,
+                '_do: response status=%s, url=%s, content-type=%s, body=%s',
+                response.status_code,
+                response.url,
+                response.headers.get('Content-Type'),
+                response.text,
+            )
         if response.status_code == 401:
             raise HetznerClientUnauthorized()
         if response.status_code == 404:
