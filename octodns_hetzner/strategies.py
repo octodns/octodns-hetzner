@@ -2,10 +2,10 @@
 #
 #
 
-"""Apply strategies for different DNS backends.
+"""Apply strategies for the Hetzner Cloud DNS backend.
 
-This module implements the Strategy pattern to handle differences
-between record-based (dnsapi) and RRSet-based (hcloud) APIs.
+This module implements the RRSet-based write semantics used by the
+Hetzner Cloud (hcloud) API.
 """
 
 from typing import Callable, List, Protocol
@@ -14,9 +14,7 @@ from typing import Callable, List, Protocol
 class ApplyStrategy(Protocol):
     """Protocol for DNS change application strategies.
 
-    Different backends have different write semantics:
-    - dnsapi: per-record CRUD operations
-    - hcloud: RRSet-based upserts and deletes
+    The hcloud backend uses RRSet-based upserts and deletes.
     """
 
     def apply_create(
@@ -57,55 +55,6 @@ class ApplyStrategy(Protocol):
             zone_records: Current zone records (for record-based deletion)
         """
         ...
-
-
-class DNSAPIStrategy:
-    """Strategy for record-based API (dnsapi backend).
-
-    This strategy implements per-record CRUD operations:
-    - Create: Create each value as a separate record
-    - Update: Delete existing records, then create new ones
-    - Delete: Delete each matching record individually
-    """
-
-    def apply_create(
-        self, client, zone_id: str, change, params_generator: Callable
-    ) -> None:
-        """Create records one by one."""
-        new = change.new
-        for params in params_generator(new):
-            client.zone_record_create(
-                zone_id,
-                params['name'],
-                params['type'],
-                params['value'],
-                params['ttl'],
-            )
-
-    def apply_update(
-        self,
-        client,
-        zone_id: str,
-        change,
-        params_generator: Callable,
-        zone_records: List = None,
-    ) -> None:
-        """Update via delete-then-create strategy."""
-        # It's simpler to delete-then-recreate than to update
-        self.apply_delete(client, zone_id, change, zone_records)
-        self.apply_create(client, zone_id, change, params_generator)
-
-    def apply_delete(
-        self, client, zone_id: str, change, zone_records: List
-    ) -> None:
-        """Delete matching records one by one."""
-        existing = change.existing
-        for record in zone_records:
-            if (
-                existing.name == record['name']
-                and existing._type == record['type']
-            ):
-                client.zone_record_delete(zone_id, record['id'])
 
 
 class HCloudStrategy:

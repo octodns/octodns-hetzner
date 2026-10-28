@@ -18,26 +18,17 @@ from .exceptions import (
     HetznerClientNotFound,
     HetznerClientUnauthorized,
 )
+from .strategies import HCloudStrategy
 
 # TODO: remove __VERSION__ with the next major version release
 __version__ = __VERSION__ = '2.0.0'
 
-# Export for backward compatibility; guard HetznerClient on successful import
 __all__ = [
     "HetznerProvider",
     "HetznerClientException",
     "HetznerClientNotFound",
     "HetznerClientUnauthorized",
 ]
-
-# Backwards-compatibility: expose HetznerClient at package level when available
-try:
-    from .dnsapi_client import HetznerClient  # type: ignore
-
-    __all__.append("HetznerClient")
-except Exception:
-    # Keep import-time failures from breaking consumers that don't use it
-    HetznerClient = None  # type: ignore
 
 
 class HetznerProvider(BaseProvider):
@@ -62,16 +53,12 @@ class HetznerProvider(BaseProvider):
 
     def __init__(self, id, token, *args, **kwargs):
         self.log = logging.getLogger(f"HetznerProvider[{id}]")
-        backend = kwargs.pop("backend", "dnsapi")
+        backend = kwargs.pop("backend", "hcloud")
         self.log.debug("__init__: id=%s, token=***, backend=%s", id, backend)
         super().__init__(id, *args, **kwargs)
 
-        # Store backend for backward compatibility
-        self._backend = backend
-
-        # Factory methods create client and strategy based on backend
         self._client = self._create_client(backend, token)
-        self._strategy = self._create_strategy(backend)
+        self._strategy = HCloudStrategy()
 
         # Cache structures
         self._zone_records = {}
@@ -79,58 +66,41 @@ class HetznerProvider(BaseProvider):
         self._zone_name_to_id = {}
 
     def _create_client(self, backend: str, token: str):
-        """Factory method for client creation with lazy imports.
+        """Create the Hetzner Cloud DNS client.
 
         Args:
-            backend: Backend type ('dnsapi' or 'hcloud')
-            token: API token
+            backend: Backend type, only 'hcloud' is supported
+            token: Hetzner Cloud API token
 
         Returns:
             DNS client instance
 
         Raises:
             ValueError: If backend is invalid
-            ImportError: If hcloud backend is requested but not installed
+            ImportError: If the hcloud package can't be imported
         """
-        if backend == "hcloud":
-            # Lazy import is fine even with mandatory dependency, improves import time
-            try:
-                from .hcloud_adapter import HCloudZonesClient
-
-                return HCloudZonesClient(token)
-            except ImportError as e:
-                # hcloud is a required dependency; guide towards reinstall/fixing env
-                raise ImportError(
-                    "backend='hcloud' requires the 'hcloud' package (required dependency). "
-                    "It should be installed automatically. Please reinstall octodns-hetzner "
-                    "or ensure your environment can import 'hcloud'."
-                ) from e
-        elif backend == "dnsapi":
-            from .dnsapi_client import HetznerClient
-
-            return HetznerClient(token)
-        else:
+        if backend == "dnsapi":
             raise ValueError(
-                f"Invalid backend '{backend}'. Must be 'dnsapi' or 'hcloud'"
+                "backend='dnsapi' is no longer supported, Hetzner has shut "
+                "down the DNS Console API. Remove the backend setting, or set "
+                "it to 'hcloud', and use a Hetzner Cloud API token. See the "
+                "octodns-hetzner README for migration details."
             )
+        elif backend != "hcloud":
+            raise ValueError(f"Invalid backend '{backend}'. Must be 'hcloud'")
 
-    def _create_strategy(self, backend: str):
-        """Factory method for strategy creation.
+        # Lazy import is fine even with mandatory dependency, improves import time
+        try:
+            from .hcloud_adapter import HCloudZonesClient
 
-        Args:
-            backend: Backend type ('dnsapi' or 'hcloud')
-
-        Returns:
-            Apply strategy instance
-        """
-        if backend == "hcloud":
-            from .strategies import HCloudStrategy
-
-            return HCloudStrategy()
-        else:
-            from .strategies import DNSAPIStrategy
-
-            return DNSAPIStrategy()
+            return HCloudZonesClient(token)
+        except ImportError as e:
+            # hcloud is a required dependency; guide towards reinstall/fixing env
+            raise ImportError(
+                "backend='hcloud' requires the 'hcloud' package (required dependency). "
+                "It should be installed automatically. Please reinstall octodns-hetzner "
+                "or ensure your environment can import 'hcloud'."
+            ) from e
 
     def _append_dot(self, value):
         if value == "@" or value[-1] == ".":
@@ -414,34 +384,18 @@ class HetznerProvider(BaseProvider):
     def _params_for_TXT(self, record):
         """Generate params for TXT records.
 
-        For hcloud backend: Uses record.chunked_values which automatically
-        splits values >255 chars into RFC-compliant chunks with proper quoting.
-
-        For dnsapi backend: Uses record.values (raw values) as the API
-        handles formatting internally.
-
-        This ensures long TXT values (e.g., DKIM keys) work correctly
-        with the hcloud backend while maintaining compatibility with dnsapi.
+        Uses record.chunked_values which automatically splits values >255
+        chars into RFC-compliant chunks with proper quoting, e.g.
+        '"chunk1" "chunk2"'. This ensures long TXT values (e.g., DKIM keys)
+        work correctly with the Hetzner Cloud API.
         """
-        if self._backend == "hcloud":
-            # Use chunked_values for proper RFC-compliant chunking
-            # Returns pre-quoted format: '"chunk1" "chunk2"'
-            for value in record.chunked_values:
-                yield {
-                    "value": value.replace("\\;", ";"),
-                    "name": record.name,
-                    "ttl": record.ttl,
-                    "type": record._type,
-                }
-        else:
-            # dnsapi backend: use raw values
-            for value in record.values:
-                yield {
-                    "value": value.replace("\\;", ";"),
-                    "name": record.name,
-                    "ttl": record.ttl,
-                    "type": record._type,
-                }
+        for value in record.chunked_values:
+            yield {
+                "value": value.replace("\\;", ";"),
+                "name": record.name,
+                "ttl": record.ttl,
+                "type": record._type,
+            }
 
     def _params_for_TLSA(self, record):
         for value in record.values:

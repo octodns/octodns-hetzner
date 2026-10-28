@@ -28,7 +28,6 @@ classifiers = [
 ]
 dependencies = [
     "octodns>=1.5.0",
-    "requests>=2.27.0",
     "hcloud>=2.3.0",
 ]
 
@@ -42,13 +41,11 @@ test = [
     "pytest",
     "pytest-cov",
     "pytest-network",
-    "requests_mock",
 ]
 dev = [
     "pytest",
     "pytest-cov",
     "pytest-network",
-    "requests_mock",
     # we need to manually/explicitely bump major versions as they're
     # likely to result in formatting changes that should happen in their
     # own PR. This will basically happen yearly

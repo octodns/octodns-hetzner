@@ -1,6 +1,6 @@
 ## Hetzner DNS provider for octoDNS
 
-An [octoDNS](https://github.com/octodns/octodns/) provider that targets [Hetzner DNS](https://www.hetzner.com/dns-console).
+An [octoDNS](https://github.com/octodns/octodns/) provider that targets [Hetzner DNS](https://docs.hetzner.com/networking/dns/).
 
 ### Installation
 
@@ -26,68 +26,28 @@ octodns-hetzner>=1.0.0
 providers:
   hetzner:
     class: octodns_hetzner.HetznerProvider
-    # Your Hetzner API token (required)
+    # Your Hetzner Cloud API token (required)
     token: env/HETZNER_TOKEN
-    # Choose backend during transition to Cloud Zones API
-    # - dnsapi (default): uses Hetzner DNS Console API (current behavior)
-    # - hcloud: uses Hetzner Cloud API (Zones). Requires a Cloud API token
-    backend: dnsapi
 ```
 
-### Backends
+The provider uses the Hetzner Cloud API through the official `hcloud` client,
+which is installed as a dependency of this package. Create the token in the
+[Hetzner Console](https://console.hetzner.com/). When zone or RRSet TTLs are
+unavailable from the API, the provider uses a fallback of `3600` seconds.
 
-- `dnsapi` (default): uses Hetzner DNS Console API with DNS tokens. Backward compatible with existing setups.
-- `hcloud`: uses Hetzner Cloud API Zones via the official `hcloud` client. Requires a Hetzner Cloud API token. The `hcloud` client library is installed as a dependency of this package.
+### Migrating from 2.x
 
-Both backends will co-exist until at least May 2026. The default remains `dnsapi`; opt into `hcloud` when ready.
+Hetzner shut down the legacy DNS Console API (`dns.hetzner.com`) in May 2026,
+and version 3.0 removes the `dnsapi` backend that used it. To upgrade:
 
-Note: The `hcloud` backend is new and may evolve. Apply (writes) are implemented via RRSet semantics in the provider, with a thin adapter using the official `hcloud` client. When zone/rrset TTLs are unavailable from the API, a conservative fallback of `3600` seconds is used.
-
-### Zone-by-Zone Migration
-
-You can configure multiple provider instances with different backends to migrate zones gradually:
-
-```yaml
-providers:
-  hetzner-dns:
-    class: octodns_hetzner.HetznerProvider
-    token: env/HETZNER_DNS_TOKEN
-    backend: dnsapi
-
-  hetzner-cloud:
-    class: octodns_hetzner.HetznerProvider
-    token: env/HETZNER_CLOUD_TOKEN
-    backend: hcloud
-
-zones:
-  # Legacy zone still using DNS Console API
-  legacy.example.com.:
-    sources:
-      - hetzner-dns
-    targets:
-      - hetzner-dns
-
-  # Zone migrated to Cloud Zones API
-  migrated.example.com.:
-    sources:
-      - hetzner-cloud
-    targets:
-      - hetzner-cloud
-```
-
-**Migration Steps**:
-
-1. **Prepare**: Ensure you have a Hetzner Cloud API token available for `hcloud`.
-2. **Configure**: Add a second provider instance with `backend: hcloud` and the Cloud API token
-3. **Test**: Run `octodns-sync --dry-run` to validate the new provider can read zones
-4. **Migrate**: Update zone configuration to use the new provider
-5. **Verify**: Confirm DNS records are identical using `octodns-compare`
-6. **Repeat**: Migrate remaining zones one at a time
-
-**Token Requirements**:
-- `dnsapi` backend: Requires DNS Console API token (from DNS Console)
-- `hcloud` backend: Requires Hetzner Cloud API token (from Cloud Console)
-- Tokens are **not interchangeable** between backends
+1. Replace the DNS Console token with a Hetzner Cloud API token. The two token
+   types aren't interchangeable, so an old DNS Console token fails with an
+   authentication error.
+2. Remove `backend: dnsapi` from your provider configuration. The provider
+   raises an error at startup if it's still set. `backend: hcloud` is still
+   accepted, so configurations that already set it keep working.
+3. Run `octodns-sync` without `--doit` and confirm the plan shows no unexpected
+   changes.
 
 ### Support Information
 
@@ -98,8 +58,8 @@ HetznerProvider supports A, AAAA, CAA, CNAME, DS, MX, NS, PTR, SRV, TLSA, and TX
 #### TXT Records and DKIM
 
 Long TXT records (such as DKIM keys exceeding 255 characters) are automatically
-chunked into RFC-compliant format when using the `hcloud` backend. For DKIM keys,
-configure them as a single TXT value in your zone file:
+chunked into RFC-compliant format. For DKIM keys, configure them as a single TXT
+value in your zone file:
 
 ```yaml
 dkim._domainkey:

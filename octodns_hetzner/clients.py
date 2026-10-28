@@ -14,8 +14,8 @@ from typing import Dict, List, Optional, Protocol
 class DNSClient(Protocol):
     """Protocol defining the expected interface for DNS clients.
 
-    Both HetznerClient (dnsapi) and HCloudZonesClient (hcloud) should
-    conform to this interface for basic operations.
+    HCloudZonesClient (hcloud) conforms to this interface for basic
+    operations.
     """
 
     def domains(self) -> List[Dict]:

@@ -13,15 +13,9 @@ from octodns_hetzner import HetznerProvider
 
 class TestHetznerProviderHCloud(TestCase):
     def _provider_with_mock_client(self):
-        # Construct with default backend to avoid importing real hcloud
         provider = HetznerProvider("test", "token", strict_supports=False)
         mock = Mock()
         provider._client = mock
-        provider._backend = "hcloud"
-        # Update strategy to match hcloud backend
-        from octodns_hetzner.strategies import HCloudStrategy
-
-        provider._strategy = HCloudStrategy()
         return provider, mock
 
     def test_apply_create_groups_values_into_rrset(self):
