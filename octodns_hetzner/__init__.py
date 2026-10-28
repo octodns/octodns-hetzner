@@ -21,7 +21,7 @@ from .exceptions import (
 from .strategies import HCloudStrategy
 
 # TODO: remove __VERSION__ with the next major version release
-__version__ = __VERSION__ = '2.0.0'
+__version__ = __VERSION__ = '3.0.0'
 
 __all__ = [
     "HetznerProvider",
