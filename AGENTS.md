@@ -1,6 +1,6 @@
 # Developer Agent Guide for octoDNS Hetzner Provider
 
-This repository contains the Hetzner provider for octoDNS. It enables planning, syncing, and applying DNS record states directly to either Hetzner DNS API or Hetzner Cloud (hcloud) DNS services.
+This repository contains the Hetzner provider for octoDNS. It enables planning, syncing, and applying DNS record states directly to Hetzner Cloud (hcloud) DNS services.
 
 > [!IMPORTANT]
 > **Core Workflow and Guidelines**
@@ -15,17 +15,14 @@ This repository contains the Hetzner provider for octoDNS. It enables planning, 
 
 ### Key Components
 
-- **Provider Class**: [HetznerProvider](file:///home/ross/octodns/octodns-hetzner/octodns_hetzner/__init__.py#L43-L498) (defined in [octodns_hetzner/__init__.py](file:///home/ross/octodns/octodns-hetzner/octodns_hetzner/__init__.py)). Dynamically initializes client adaptors and update strategies depending on the selected backend configuration.
-- **Client Adapters**:
-  - [HetznerClient](file:///home/ross/octodns/octodns-hetzner/octodns_hetzner/dnsapi_client.py) (defined in [octodns_hetzner/dnsapi_client.py](file:///home/ross/octodns/octodns-hetzner/octodns_hetzner/dnsapi_client.py)) connects to the standard Hetzner DNS API (`https://dns.hetzner.com/api/v1`).
+- **Provider Class**: [HetznerProvider](file:///home/ross/octodns/octodns-hetzner/octodns_hetzner/__init__.py#L34-L451) (defined in [octodns_hetzner/__init__.py](file:///home/ross/octodns/octodns-hetzner/octodns_hetzner/__init__.py)). Initializes the hcloud client adapter and the [HCloudStrategy](file:///home/ross/octodns/octodns-hetzner/octodns_hetzner/strategies.py) update strategy.
+- **Client Adapter**:
   - [HCloudZonesClient](file:///home/ross/octodns/octodns-hetzner/octodns_hetzner/hcloud_adapter.py) (defined in [octodns_hetzner/hcloud_adapter.py](file:///home/ross/octodns/octodns-hetzner/octodns_hetzner/hcloud_adapter.py)) integrates with Hetzner Cloud (hcloud) DNS services.
 
 ### Key Workflows & Features
 
 1. **Supported Record Types**: `A`, `AAAA`, `CAA`, `CNAME`, `DS`, `MX`, `NS`, `PTR`, `SRV`, `TLSA`, `TXT`.
-2. **Backends**: Configured via the `backend` argument:
-   - `dnsapi`: Targets standard public Hetzner DNS zones (uses Bearer Token authentication).
-   - `hcloud`: Targets Hetzner Cloud platform DNS.
+2. **Backend**: Hetzner Cloud (`hcloud`) is the default and only backend. The `backend` argument is optional and still accepts `hcloud`. `backend: dnsapi` raises a `ValueError` with migration guidance, and any other value raises a `ValueError`.
 3. **Root Name Server Support**: Fully supported (`SUPPORTS_ROOT_NS=True`).
 4. **Dynamic Routing**: Not supported (`SUPPORTS_DYNAMIC=False`, `SUPPORTS_GEO=False`).
 5. **Dynamic Subnets**: Not supported (`SUPPORTS_DYNAMIC_SUBNETS=False`).

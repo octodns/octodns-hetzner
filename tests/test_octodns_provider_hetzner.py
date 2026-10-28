@@ -2,19 +2,20 @@
 #
 #
 
+import json
 from os.path import dirname, join
 from unittest import TestCase
 from unittest.mock import Mock, call
-
-from requests import HTTPError
-from requests_mock import ANY
-from requests_mock import mock as requests_mock
 
 from octodns.provider.yaml import YamlProvider
 from octodns.record import Record
 from octodns.zone import Zone
 
-from octodns_hetzner import HetznerClientNotFound, HetznerProvider
+from octodns_hetzner import (
+    HetznerClientNotFound,
+    HetznerClientUnauthorized,
+    HetznerProvider,
+)
 
 
 class TestHetznerProvider(TestCase):
@@ -24,418 +25,172 @@ class TestHetznerProvider(TestCase):
     )
     source.populate(expected)
 
+    def _provider_with_mock_client(self, **kwargs):
+        provider = HetznerProvider('test', 'token', **kwargs)
+        client = Mock()
+        provider._client = client
+        return provider, client
+
+    def _fixture(self, name):
+        with open(join(dirname(__file__), 'fixtures', name)) as fh:
+            return json.load(fh)
+
     def test_populate(self):
-        provider = HetznerProvider('test', 'token')
-
-        # Bad auth
-        with requests_mock() as mock:
-            mock.get(
-                ANY,
-                status_code=401,
-                text='{"message":"Invalid authentication credentials"}',
-            )
-
-            with self.assertRaises(Exception) as ctx:
-                zone = Zone('unit.tests.', [])
-                provider.populate(zone)
-            self.assertEqual('Unauthorized', str(ctx.exception))
-
-        # General error
-        with requests_mock() as mock:
-            mock.get(ANY, status_code=502, text='Things caught fire')
-
-            with self.assertRaises(HTTPError) as ctx:
-                zone = Zone('unit.tests.', [])
-                provider.populate(zone)
-            self.assertEqual(502, ctx.exception.response.status_code)
+        provider, client = self._provider_with_mock_client()
 
         # Non-existent zone doesn't populate anything
-        with requests_mock() as mock:
-            mock.get(
-                ANY,
-                status_code=404,
-                text='{"zone":{"id":"","name":"","ttl":0,"registrar":"",'
-                '"legacy_dns_host":"","legacy_ns":null,"ns":null,'
-                '"created":"","verified":"","modified":"","project":"",'
-                '"owner":"","permission":"","zone_type":{"id":"",'
-                '"name":"","description":"","prices":null},"status":"",'
-                '"paused":false,"is_secondary_dns":false,'
-                '"txt_verification":{"name":"","token":""},'
-                '"records_count":0},"error":{'
-                '"message":"zone not found","code":404}}',
-            )
-
-            zone = Zone('unit.tests.', [])
-            provider.populate(zone)
-            self.assertEqual(set(), zone.records)
+        client.zone_get.side_effect = HetznerClientNotFound
+        zone = Zone('unit.tests.', [])
+        self.assertFalse(provider.populate(zone))
+        self.assertEqual(set(), zone.records)
 
         # No diffs == no changes
-        with requests_mock() as mock:
-            base = provider._client.BASE_URL
-            with open('tests/fixtures/hetzner-zones.json') as fh:
-                mock.get(f'{base}/zones', text=fh.read())
-            with open('tests/fixtures/hetzner-records.json') as fh:
-                mock.get(f'{base}/records', text=fh.read())
+        client.zone_get.side_effect = None
+        client.zone_get.return_value = self._fixture('hetzner-zones.json')[
+            'zones'
+        ][0]
+        records = self._fixture('hetzner-records.json')['records']
+        for record in records:
+            if record['name'] == '@':
+                record['name'] = ''
+        client.zone_records_get.return_value = records
 
-            zone = Zone('unit.tests.', [])
-            provider.populate(zone)
-            self.assertEqual(15, len(zone.records))
-            changes = self.expected.changes(zone, provider)
-            self.assertEqual(0, len(changes))
+        zone = Zone('unit.tests.', [])
+        self.assertTrue(provider.populate(zone))
+        self.assertEqual(15, len(zone.records))
+        changes = self.expected.changes(zone, provider)
+        self.assertEqual(0, len(changes))
 
         # 2nd populate makes no network calls/all from cache
+        client.zone_records_get.reset_mock()
         again = Zone('unit.tests.', [])
         provider.populate(again)
         self.assertEqual(15, len(again.records))
-
-        # bust the cache
-        del provider._zone_records[zone.name]
+        client.zone_records_get.assert_not_called()
 
     def test_apply(self):
-        provider = HetznerProvider('test', 'token', strict_supports=False)
-
-        resp = Mock()
-        resp.json = Mock()
-        provider._client._do = Mock(return_value=resp)
-
-        domain_after_creation = {
-            'zone': {'id': 'unit.tests', 'name': 'unit.tests', 'ttl': 3600}
-        }
+        provider, client = self._provider_with_mock_client(
+            strict_supports=False
+        )
 
         # non-existent domain, create everything
-        resp.json.side_effect = [
-            HetznerClientNotFound,  # no zone in populate
-            HetznerClientNotFound,  # no zone during apply
-            domain_after_creation,
-        ]
+        client.zone_get.side_effect = HetznerClientNotFound
+        client.zone_create.return_value = {
+            'id': 'unit.tests',
+            'name': 'unit.tests',
+            'ttl': 3600,
+        }
         plan = provider.plan(self.expected)
 
-        # No ignored, no excluded, no unsupported
-        # Adjust for newly supported PTR record type
+        # One RRSet per supported name+type
         n = len(self.expected.records) - 7
         self.assertEqual(n, len(plan.changes))
         self.assertEqual(n, provider.apply(plan))
         self.assertFalse(plan.exists)
 
-        provider._client._do.assert_has_calls(
+        client.zone_create.assert_called_once_with('unit.tests')
+        client.rrset_upsert.assert_has_calls(
             [
-                # created the zone
+                call('unit.tests', '', 'A', ['1.2.3.4', '1.2.3.5'], 300),
                 call(
-                    'POST', '/zones', None, {'name': 'unit.tests', 'ttl': None}
-                ),
-                # created all the records with their expected data
-                call(
-                    'POST',
-                    '/records',
-                    data={
-                        'name': '@',
-                        'ttl': 300,
-                        'type': 'A',
-                        'value': '1.2.3.4',
-                        'zone_id': 'unit.tests',
-                    },
+                    'unit.tests', '', 'CAA', ['0 issue "ca.unit.tests"'], 3600
                 ),
                 call(
-                    'POST',
-                    '/records',
-                    data={
-                        'name': '@',
-                        'ttl': 300,
-                        'type': 'A',
-                        'value': '1.2.3.5',
-                        'zone_id': 'unit.tests',
-                    },
+                    'unit.tests',
+                    '',
+                    'NS',
+                    ['ns1.unit.tests.', 'ns2.unit.tests.'],
+                    3600,
+                ),
+                call('unit.tests', '_imap._tcp', 'SRV', ['0 0 0 .'], 600),
+                call('unit.tests', '_pop3._tcp', 'SRV', ['0 0 0 .'], 600),
+                call(
+                    'unit.tests',
+                    '_srv._tcp',
+                    'SRV',
+                    [
+                        '10 20 30 foo-1.unit.tests.',
+                        '12 20 30 foo-2.unit.tests.',
+                    ],
+                    600,
                 ),
                 call(
-                    'POST',
-                    '/records',
-                    data={
-                        'name': '@',
-                        'ttl': 3600,
-                        'type': 'CAA',
-                        'value': '0 issue "ca.unit.tests"',
-                        'zone_id': 'unit.tests',
-                    },
+                    'unit.tests',
+                    'aaaa',
+                    'AAAA',
+                    ['2601:644:500:e210:62f8:1dff:feb8:947a'],
+                    600,
                 ),
+                call('unit.tests', 'cname', 'CNAME', ['unit.tests.'], 300),
+                call('unit.tests', 'included', 'CNAME', ['unit.tests.'], 3600),
                 call(
-                    'POST',
-                    '/records',
-                    data={
-                        'name': '@',
-                        'ttl': 3600,
-                        'type': 'NS',
-                        'value': 'ns1.unit.tests.',
-                        'zone_id': 'unit.tests',
-                    },
+                    'unit.tests',
+                    'mx',
+                    'MX',
+                    [
+                        '10 smtp-4.unit.tests.',
+                        '20 smtp-2.unit.tests.',
+                        '30 smtp-3.unit.tests.',
+                        '40 smtp-1.unit.tests.',
+                    ],
+                    300,
                 ),
+                call('unit.tests', 'ptr', 'PTR', ['foo.bar.com.'], 300),
+                call('unit.tests', 'sub', 'NS', ['6.2.3.4.', '7.2.3.4.'], 3600),
                 call(
-                    'POST',
-                    '/records',
-                    data={
-                        'name': '@',
-                        'ttl': 3600,
-                        'type': 'NS',
-                        'value': 'ns2.unit.tests.',
-                        'zone_id': 'unit.tests',
-                    },
+                    'unit.tests',
+                    'txt',
+                    'TXT',
+                    [
+                        '"Bah bah black sheep"',
+                        '"have you any wool."',
+                        '"v=DKIM1;k=rsa;s=email;h=sha256;'
+                        'p=A/kinda+of/long/string+with+numb3rs"',
+                    ],
+                    600,
                 ),
-                call(
-                    'POST',
-                    '/records',
-                    data={
-                        'name': '_imap._tcp',
-                        'ttl': 600,
-                        'type': 'SRV',
-                        'value': '0 0 0 .',
-                        'zone_id': 'unit.tests',
-                    },
-                ),
-                call(
-                    'POST',
-                    '/records',
-                    data={
-                        'name': '_pop3._tcp',
-                        'ttl': 600,
-                        'type': 'SRV',
-                        'value': '0 0 0 .',
-                        'zone_id': 'unit.tests',
-                    },
-                ),
-                call(
-                    'POST',
-                    '/records',
-                    data={
-                        'name': '_srv._tcp',
-                        'ttl': 600,
-                        'type': 'SRV',
-                        'value': '10 20 30 foo-1.unit.tests.',
-                        'zone_id': 'unit.tests',
-                    },
-                ),
-                call(
-                    'POST',
-                    '/records',
-                    data={
-                        'name': '_srv._tcp',
-                        'ttl': 600,
-                        'type': 'SRV',
-                        'value': '12 20 30 foo-2.unit.tests.',
-                        'zone_id': 'unit.tests',
-                    },
-                ),
-                call(
-                    'POST',
-                    '/records',
-                    data={
-                        'name': 'aaaa',
-                        'ttl': 600,
-                        'type': 'AAAA',
-                        'value': '2601:644:500:e210:62f8:1dff:feb8:947a',
-                        'zone_id': 'unit.tests',
-                    },
-                ),
-                call(
-                    'POST',
-                    '/records',
-                    data={
-                        'name': 'cname',
-                        'ttl': 300,
-                        'type': 'CNAME',
-                        'value': 'unit.tests.',
-                        'zone_id': 'unit.tests',
-                    },
-                ),
-                call(
-                    'POST',
-                    '/records',
-                    data={
-                        'name': 'included',
-                        'ttl': 3600,
-                        'type': 'CNAME',
-                        'value': 'unit.tests.',
-                        'zone_id': 'unit.tests',
-                    },
-                ),
-                call(
-                    'POST',
-                    '/records',
-                    data={
-                        'name': 'mx',
-                        'ttl': 300,
-                        'type': 'MX',
-                        'value': '10 smtp-4.unit.tests.',
-                        'zone_id': 'unit.tests',
-                    },
-                ),
-                call(
-                    'POST',
-                    '/records',
-                    data={
-                        'name': 'mx',
-                        'ttl': 300,
-                        'type': 'MX',
-                        'value': '20 smtp-2.unit.tests.',
-                        'zone_id': 'unit.tests',
-                    },
-                ),
-                call(
-                    'POST',
-                    '/records',
-                    data={
-                        'name': 'mx',
-                        'ttl': 300,
-                        'type': 'MX',
-                        'value': '30 smtp-3.unit.tests.',
-                        'zone_id': 'unit.tests',
-                    },
-                ),
-                call(
-                    'POST',
-                    '/records',
-                    data={
-                        'name': 'mx',
-                        'ttl': 300,
-                        'type': 'MX',
-                        'value': '40 smtp-1.unit.tests.',
-                        'zone_id': 'unit.tests',
-                    },
-                ),
-                call(
-                    'POST',
-                    '/records',
-                    data={
-                        'name': 'ptr',
-                        'ttl': 300,
-                        'type': 'PTR',
-                        'value': 'foo.bar.com.',
-                        'zone_id': 'unit.tests',
-                    },
-                ),
-                call(
-                    'POST',
-                    '/records',
-                    data={
-                        'name': 'sub',
-                        'ttl': 3600,
-                        'type': 'NS',
-                        'value': '6.2.3.4.',
-                        'zone_id': 'unit.tests',
-                    },
-                ),
-                call(
-                    'POST',
-                    '/records',
-                    data={
-                        'name': 'sub',
-                        'ttl': 3600,
-                        'type': 'NS',
-                        'value': '7.2.3.4.',
-                        'zone_id': 'unit.tests',
-                    },
-                ),
-                call(
-                    'POST',
-                    '/records',
-                    data={
-                        'name': 'txt',
-                        'ttl': 600,
-                        'type': 'TXT',
-                        'value': 'Bah bah black sheep',
-                        'zone_id': 'unit.tests',
-                    },
-                ),
-                call(
-                    'POST',
-                    '/records',
-                    data={
-                        'name': 'txt',
-                        'ttl': 600,
-                        'type': 'TXT',
-                        'value': 'have you any wool.',
-                        'zone_id': 'unit.tests',
-                    },
-                ),
-                call(
-                    'POST',
-                    '/records',
-                    data={
-                        'name': 'txt',
-                        'ttl': 600,
-                        'type': 'TXT',
-                        'value': 'v=DKIM1;k=rsa;s=email;h=sha256;'
-                        'p=A/kinda+of/long/string+with+numb3rs',
-                        'zone_id': 'unit.tests',
-                    },
-                ),
-                call(
-                    'POST',
-                    '/records',
-                    data={
-                        'name': 'www',
-                        'ttl': 300,
-                        'type': 'A',
-                        'value': '2.2.3.6',
-                        'zone_id': 'unit.tests',
-                    },
-                ),
-                call(
-                    'POST',
-                    '/records',
-                    data={
-                        'name': 'www.sub',
-                        'ttl': 300,
-                        'type': 'A',
-                        'value': '2.2.3.6',
-                        'zone_id': 'unit.tests',
-                    },
-                ),
-            ]
+                call('unit.tests', 'www', 'A', ['2.2.3.6'], 300),
+                call('unit.tests', 'www.sub', 'A', ['2.2.3.6'], 300),
+            ],
+            any_order=True,
         )
-        self.assertEqual(27, provider._client._do.call_count)
+        self.assertEqual(n, client.rrset_upsert.call_count)
 
-        provider._client._do.reset_mock()
+        client.reset_mock()
 
         # delete 1 and update 1
-        provider._client.zone_get = Mock(
-            return_value={'id': 'unit.tests', 'name': 'unit.tests', 'ttl': 3600}
-        )
-        provider._client.zone_records_get = Mock(
-            return_value=[
-                {
-                    'type': 'A',
-                    'id': 'one',
-                    'created': '0000-00-00T00:00:00Z',
-                    'modified': '0000-00-00T00:00:00Z',
-                    'zone_id': 'unit.tests',
-                    'name': 'www',
-                    'value': '1.2.3.4',
-                    'ttl': 300,
-                },
-                {
-                    'type': 'A',
-                    'id': 'two',
-                    'created': '0000-00-00T00:00:00Z',
-                    'modified': '0000-00-00T00:00:00Z',
-                    'zone_id': 'unit.tests',
-                    'name': 'www',
-                    'value': '2.2.3.4',
-                    'ttl': 300,
-                },
-                {
-                    'type': 'A',
-                    'id': 'three',
-                    'created': '0000-00-00T00:00:00Z',
-                    'modified': '0000-00-00T00:00:00Z',
-                    'zone_id': 'unit.tests',
-                    'name': 'ttl',
-                    'value': '3.2.3.4',
-                    'ttl': 600,
-                },
-            ]
-        )
-
-        # Domain exists, we don't care about return
-        resp.json.side_effect = ['{}']
+        client.zone_get.side_effect = None
+        client.zone_get.return_value = {
+            'id': 'unit.tests',
+            'name': 'unit.tests',
+            'ttl': 3600,
+        }
+        client.zone_records_get.return_value = [
+            {
+                'type': 'A',
+                'id': 'one',
+                'zone_id': 'unit.tests',
+                'name': 'www',
+                'value': '1.2.3.4',
+                'ttl': 300,
+            },
+            {
+                'type': 'A',
+                'id': 'two',
+                'zone_id': 'unit.tests',
+                'name': 'www',
+                'value': '2.2.3.4',
+                'ttl': 300,
+            },
+            {
+                'type': 'A',
+                'id': 'three',
+                'zone_id': 'unit.tests',
+                'name': 'ttl',
+                'value': '3.2.3.4',
+                'ttl': 600,
+            },
+        ]
 
         wanted = Zone('unit.tests.', [])
         wanted.add_record(
@@ -448,139 +203,24 @@ class TestHetznerProvider(TestCase):
         self.assertTrue(plan.exists)
         self.assertEqual(2, len(plan.changes))
         self.assertEqual(2, provider.apply(plan))
-        # recreate for update, and delete for the 2 parts of the other
-        provider._client._do.assert_has_calls(
-            [
-                call(
-                    'POST',
-                    '/records',
-                    data={
-                        'name': 'ttl',
-                        'ttl': 300,
-                        'type': 'A',
-                        'value': '3.2.3.4',
-                        'zone_id': 'unit.tests',
-                    },
-                ),
-                call('DELETE', '/records/one'),
-                call('DELETE', '/records/two'),
-                call('DELETE', '/records/three'),
-            ],
-            any_order=True,
+        client.zone_create.assert_not_called()
+        # Update replaces the ttl RRSet, delete removes the whole www RRSet
+        client.rrset_upsert.assert_called_once_with(
+            'unit.tests', 'ttl', 'A', ['3.2.3.4'], 300
         )
+        client.rrset_delete.assert_called_once_with('unit.tests', 'www', 'A')
 
     def test_list_zones(self):
-        provider = HetznerProvider('test', 'token')
+        provider, client = self._provider_with_mock_client()
+        client.domains.return_value = self._fixture('hetzner-zones.json')[
+            'zones'
+        ]
 
-        with requests_mock() as mock:
-            base = provider._client.BASE_URL
-            with open('tests/fixtures/hetzner-zones.json') as fh:
-                mock.get(f'{base}/zones', text=fh.read())
+        self.assertEqual(['unit.tests.'], provider.list_zones())
 
-            zones = provider.list_zones()
-            self.assertEqual(['unit.tests.'], zones)
-
-    def test_domains_pagination(self):
-        provider = HetznerProvider('test', 'token')
-
-        with requests_mock() as mock:
-            base = provider._client.BASE_URL
-
-            # First page response
-            page1_response = {
-                "zones": [
-                    {"id": "test1.com", "name": "test1.com", "ttl": 3600},
-                    {"id": "test2.com", "name": "test2.com", "ttl": 3600},
-                ],
-                "meta": {
-                    "pagination": {
-                        "page": 1,
-                        "per_page": 2,
-                        "previous_page": 1,
-                        "next_page": 2,
-                        "last_page": 2,
-                        "total_entries": 3,
-                    }
-                },
-            }
-
-            # Second page response
-            page2_response = {
-                "zones": [
-                    {"id": "test3.com", "name": "test3.com", "ttl": 3600}
-                ],
-                "meta": {
-                    "pagination": {
-                        "page": 2,
-                        "per_page": 2,
-                        "previous_page": 1,
-                        "next_page": 2,
-                        "last_page": 2,
-                        "total_entries": 3,
-                    }
-                },
-            }
-
-            mock.get(f'{base}/zones?page=1', json=page1_response)
-            mock.get(f'{base}/zones?page=2', json=page2_response)
-
-            domains = provider._client.domains()
-            self.assertEqual(3, len(domains))
-            self.assertEqual('test1.com', domains[0]['name'])
-            self.assertEqual('test2.com', domains[1]['name'])
-            self.assertEqual('test3.com', domains[2]['name'])
-
-    def test_hetzner_client_backward_compat_import(self):
-        """Test backward-compatible HetznerClient import."""
-        # Test successful import (normal case)
-        from octodns_hetzner import HetznerClient as ImportedClient
-
-        # HetznerClient should be available
-        self.assertIsNotNone(ImportedClient)
-        # It should be the same as the direct import
-        from octodns_hetzner.dnsapi_client import HetznerClient as DirectClient
-
-        self.assertIs(ImportedClient, DirectClient)
-
-    def test_hetzner_client_import_failure(self):
-        """Test HetznerClient import failure fallback."""
-        import sys
-
-        # Save original modules
-        orig_init = sys.modules.get('octodns_hetzner')
-        orig_dnsapi = sys.modules.get('octodns_hetzner.dnsapi_client')
-        orig_all_keys = list(sys.modules.keys())
-
-        try:
-            # Make dnsapi_client unavailable
-            sys.modules['octodns_hetzner.dnsapi_client'] = None
-
-            # Remove octodns_hetzner to force reload
-            if 'octodns_hetzner' in sys.modules:
-                del sys.modules['octodns_hetzner']
-
-            # Import octodns_hetzner - dnsapi_client import should fail
-            import octodns_hetzner
-
-            # Verify HetznerClient is None (fallback was triggered)
-            self.assertIsNone(octodns_hetzner.HetznerClient)
-
-        finally:
-            # Restore original modules
-            if orig_init is not None:
-                sys.modules['octodns_hetzner'] = orig_init
-            else:
-                sys.modules.pop('octodns_hetzner', None)
-
-            if orig_dnsapi is not None:
-                sys.modules['octodns_hetzner.dnsapi_client'] = orig_dnsapi
-            else:
-                sys.modules.pop('octodns_hetzner.dnsapi_client', None)
-
-            # Clean up any modules that were imported during the test
-            for key in list(sys.modules.keys()):
-                if key not in orig_all_keys and 'octodns_hetzner' in key:
-                    del sys.modules[key]
+    def test_exceptions(self):
+        self.assertEqual('Not Found', str(HetznerClientNotFound()))
+        self.assertEqual('Unauthorized', str(HetznerClientUnauthorized()))
 
     def test_hcloud_backend_import_error(self):
         """Test ImportError when hcloud backend is requested but unavailable."""
