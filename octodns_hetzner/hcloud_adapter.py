@@ -17,8 +17,6 @@ import logging
 from typing import Any, Dict, List
 
 DEFAULT_TTL = 3600
-# Hetzner rejects RRSet TTLs below 60 seconds (invalid_input in field 'ttl')
-MIN_TTL = 60
 
 
 class HCloudZonesClient:
@@ -224,16 +222,6 @@ class HCloudZonesClient:
 
         This is the primary mutation primitive used by the provider.
         """
-        if ttl is not None and ttl < MIN_TTL:
-            self._log.warning(
-                'TTL %d of %s %s is below the minimum of %d, using %d',
-                ttl,
-                name or '@',
-                _type,
-                MIN_TTL,
-                MIN_TTL,
-            )
-            ttl = MIN_TTL
         zone = self._get_zone_by_id_or_name(zone_id)
         # Try to locate existing rrset
         rrsets = self._get_rrsets(zone)

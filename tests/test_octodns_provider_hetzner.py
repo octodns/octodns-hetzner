@@ -10,6 +10,7 @@ from requests import HTTPError
 from requests_mock import ANY
 from requests_mock import mock as requests_mock
 
+from octodns.provider import SupportsException
 from octodns.provider.yaml import YamlProvider
 from octodns.record import Record
 from octodns.zone import Zone
@@ -468,6 +469,34 @@ class TestHetznerProvider(TestCase):
             ],
             any_order=True,
         )
+
+    def test_process_desired_zone_min_ttl(self):
+        def desired():
+            zone = Zone('unit.tests.', [])
+            zone.add_record(
+                Record.new(
+                    zone, 'low', {'ttl': 23, 'type': 'A', 'value': '3.2.3.4'}
+                )
+            )
+            zone.add_record(
+                Record.new(
+                    zone, 'ok', {'ttl': 300, 'type': 'A', 'value': '3.2.3.4'}
+                )
+            )
+            return zone
+
+        # lenient: warn and clamp during planning, so the plan matches what
+        # Hetzner stores
+        provider = HetznerProvider('test', 'token', strict_supports=False)
+        processed = provider._process_desired_zone(desired())
+        ttls = {r.name: r.ttl for r in processed.records}
+        self.assertEqual({'low': 60, 'ok': 300}, ttls)
+
+        # strict: refuse
+        provider = HetznerProvider('test', 'token', strict_supports=True)
+        with self.assertRaises(SupportsException) as ctx:
+            provider._process_desired_zone(desired())
+        self.assertIn('ttl 23 is not supported by Hetzner', str(ctx.exception))
 
     def test_list_zones(self):
         provider = HetznerProvider('test', 'token')

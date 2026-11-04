@@ -60,6 +60,9 @@ class HetznerProvider(BaseProvider):
         )
     )
 
+    # Hetzner rejects TTLs below 60 seconds (invalid_input in field 'ttl')
+    MIN_TTL = 60
+
     def __init__(self, id, token, *args, **kwargs):
         self.log = logging.getLogger(f"HetznerProvider[{id}]")
         backend = kwargs.pop("backend", "dnsapi")
@@ -304,6 +307,18 @@ class HetznerProvider(BaseProvider):
                 return []
 
         return self._zone_records[zone.name]
+
+    def _process_desired_zone(self, desired):
+        for record in desired.records:
+            if record.ttl < self.MIN_TTL:
+                msg = f"ttl {record.ttl} is not supported by Hetzner, {record.fqdn}"
+                fallback = f"clamping to {self.MIN_TTL}"
+                self.supports_warn_or_except(msg, fallback)
+                record = record.copy()
+                record.ttl = self.MIN_TTL
+                desired.add_record(record, replace=True)
+
+        return super()._process_desired_zone(desired)
 
     def populate(self, zone, target=False, lenient=False):
         self.log.debug(
