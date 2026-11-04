@@ -305,6 +305,16 @@ class TestHCloudAdapter(TestCase):
         cn = [r for r in z.rrsets if r.type == "CNAME" and r.name == "www"]
         self.assertEqual(1, len(cn))
 
+    def test_rrset_upsert_clamps_low_ttl(self):
+        # Hetzner rejects TTLs below 60 seconds
+        self.client.rrset_upsert("z1", "www", "CNAME", ["unit.tests."], 23)
+        z = self.client._zones.get_by_id("z1")
+        cn = [r for r in z.rrsets if r.type == "CNAME" and r.name == "www"][0]
+        self.assertEqual(60, cn.ttl)
+
+        self.client.rrset_upsert("z1", "www", "CNAME", ["unit.tests."], 30)
+        self.assertEqual(60, cn.ttl)
+
     def test_rrset_delete(self):
         # Delete TXT 'gone'
         self.client.rrset_delete("z1", "gone", "TXT")
