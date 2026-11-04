@@ -22,7 +22,7 @@ DEFAULT_TTL = 3600
 class HCloudZonesClient:
     """Thin wrapper around hcloud's Zones client.
 
-    Methods mirror a subset of the existing HetznerClient so the provider can
+    Methods implement the DNSClient protocol (see clients.py) so the provider can
     operate without broader changes. Both read and write operations are
     supported; writes use RRSet upsert/delete semantics and provide
     compatibility shims for record-level create/delete.
@@ -64,7 +64,7 @@ class HCloudZonesClient:
     def domains(self) -> List[Dict]:
         """Return a list of zones with at least a 'name' key.
 
-        Shape aligns with HetznerClient.domains(), which returns dicts.
+        Shape aligns with the DNSClient protocol, which returns dicts.
         """
         zones = self._zones.get_all()
         ret = []

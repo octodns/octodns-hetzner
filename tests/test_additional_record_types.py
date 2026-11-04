@@ -14,7 +14,7 @@ from octodns_hetzner import HetznerProvider
 class TestAdditionalRecordTypes(TestCase):
     def test_populate_ds_tlsa_ptr(self):
         provider = HetznerProvider('test', 'token')
-        # Mock dnsapi client methods
+        # Mock client methods
         provider._client.zone_get = Mock(
             return_value={'id': 'unit.tests', 'name': 'unit.tests', 'ttl': 3600}
         )
@@ -70,7 +70,7 @@ class TestAdditionalRecordTypes(TestCase):
             return_value={'id': 'unit.tests', 'name': 'unit.tests', 'ttl': 3600}
         )
         provider._client.zone_records_get = Mock(return_value=[])
-        provider._client.zone_record_create = Mock()
+        provider._client.rrset_upsert = Mock()
 
         zone = Zone('unit.tests.', [])
         # DS
@@ -124,24 +124,25 @@ class TestAdditionalRecordTypes(TestCase):
         self.assertEqual(3, len(plan.changes))
         provider.apply(plan)
 
-        calls = provider._client.zone_record_create.call_args_list
+        calls = provider._client.rrset_upsert.call_args_list
         self.assertEqual(3, len(calls))
-        # Ensure individual calls were made with expected positional args
+        # One RRSet upsert per name+type, values are lowercased for comparison
         args_list = [list(c.args) for c in calls]
         for args in args_list:
-            args[3] = args[3].lower()
+            args[3] = [v.lower() for v in args[3]]
         self.assertIn(
-            ['unit.tests', '', 'DS', '2371 8 2 31fdab', 3600], args_list
+            ['unit.tests', '', 'DS', ['2371 8 2 31fdab'], 3600], args_list
         )
         self.assertIn(
-            ['unit.tests', '_443._tcp', 'TLSA', '3 1 1 aabbcc', 600], args_list
+            ['unit.tests', '_443._tcp', 'TLSA', ['3 1 1 aabbcc'], 600],
+            args_list,
         )
         self.assertIn(
             [
                 'unit.tests',
                 '4.3.2.1.in-addr.arpa',
                 'PTR',
-                'ptr.unit.tests.',
+                ['ptr.unit.tests.'],
                 300,
             ],
             args_list,

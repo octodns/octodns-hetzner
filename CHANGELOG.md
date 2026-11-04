@@ -1,3 +1,11 @@
+## 3.0.0 - 2026-10-28
+
+Major:
+* Remove the `dnsapi` backend now that Hetzner has shut down the DNS Console API, `hcloud` is now the default and only backend - [#78](https://github.com/octodns/octodns-hetzner/pull/78)
+
+Minor:
+* Modernize packaging: move build metadata from setup.py into pyproject.toml, remove setup.py; require Python >=3.10 - [#69](https://github.com/octodns/octodns-hetzner/pull/69)
+
 ## 2.0.0 - 2026-02-12
 
 Major:
